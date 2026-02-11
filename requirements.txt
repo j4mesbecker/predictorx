@@ -1,0 +1,48 @@
+# PredictorX — Unified Prediction Intelligence Platform
+# Web framework
+fastapi>=0.115.0
+uvicorn[standard]>=0.30.0
+jinja2>=3.1.0
+
+# Async HTTP
+httpx>=0.28.0
+websockets>=12.0
+
+# Database
+sqlalchemy>=2.0.0
+aiosqlite>=0.19.0
+
+# Scheduling
+apscheduler>=3.10.0
+
+# Configuration
+pydantic>=2.0.0
+pydantic-settings>=2.0.0
+python-dotenv>=1.0.0
+
+# Data/Math
+pandas>=2.0.0
+numpy>=1.24.0
+
+# Kalshi API auth (RSA signing)
+cryptography>=42.0.0
+
+# Kalshi SDK (used by polymarket-trader adapters)
+kalshi-python>=2.1.0
+
+# CLI
+click>=8.1.0
+rich>=13.0.0
+
+# HTTP requests (weather APIs and adapters)
+requests>=2.31.0
+
+# Spreadsheets
+openpyxl>=3.1.0
+
+# Statistics
+scipy>=1.13.0
+
+# Testing
+pytest>=8.0.0
+pytest-asyncio>=0.23.0

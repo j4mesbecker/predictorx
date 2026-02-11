@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PredictorX — Prediction Intelligence</title>
+    <link rel="stylesheet" href="/static/style.css">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+</head>
+<body>
+    <header>
+        <div class="header-left">
+            <h1>PredictorX</h1>
+            <span class="subtitle">Prediction Intelligence Platform</span>
+        </div>
+        <div class="header-right">
+            <div id="vix-badge" class="badge">VIX: --</div>
+            <div id="regime-badge" class="badge">--</div>
+            <div id="ws-status" class="badge badge-offline">Offline</div>
+        </div>
+    </header>
+
+    <nav>
+        <button class="nav-btn active" data-tab="dashboard">Dashboard</button>
+        <button class="nav-btn" data-tab="opportunities">Opportunities</button>
+        <button class="nav-btn" data-tab="weather">Weather</button>
+        <button class="nav-btn" data-tab="tails">S&P Tails</button>
+        <button class="nav-btn" data-tab="whales">Whales</button>
+        <button class="nav-btn" data-tab="performance">Performance</button>
+        <button class="nav-btn" data-tab="calibration">Calibration</button>
+    </nav>
+
+    <main>
+        <!-- Dashboard Tab -->
+        <section id="tab-dashboard" class="tab-content active">
+            <div class="stats-grid">
+                <div class="stat-card">
+                    <div class="stat-label">Total Predictions</div>
+                    <div class="stat-value" id="stat-total">--</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-label">Accuracy</div>
+                    <div class="stat-value" id="stat-accuracy">--</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-label">Hypothetical P&L</div>
+                    <div class="stat-value" id="stat-pnl">--</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-label">Whale Signals (24h)</div>
+                    <div class="stat-value" id="stat-whales">--</div>
+                </div>
+            </div>
+
+            <div class="chart-container">
+                <h3>Recent Predictions</h3>
+                <table id="recent-table">
+                    <thead>
+                        <tr>
+                            <th>Strategy</th>
+                            <th>Market</th>
+                            <th>Side</th>
+                            <th>Edge</th>
+                            <th>Confidence</th>
+                            <th>Outcome</th>
+                        </tr>
+                    </thead>
+                    <tbody id="recent-body"></tbody>
+                </table>
+            </div>
+        </section>
+
+        <!-- Opportunities Tab -->
+        <section id="tab-opportunities" class="tab-content">
+            <div class="controls">
+                <button id="btn-scan" class="btn btn-primary">Run Scan</button>
+                <span id="scan-status"></span>
+            </div>
+            <div id="opportunities-list" class="card-list"></div>
+        </section>
+
+        <!-- Weather Tab -->
+        <section id="tab-weather" class="tab-content">
+            <div class="controls">
+                <select id="weather-city">
+                    <option value="">All Cities</option>
+                    <option value="NYC">New York</option>
+                    <option value="CHI">Chicago</option>
+                    <option value="MIA">Miami</option>
+                    <option value="PHI">Philadelphia</option>
+                    <option value="AUS">Austin</option>
+                    <option value="DEN">Denver</option>
+                    <option value="SFO">San Francisco</option>
+                </select>
+            </div>
+            <div id="weather-list" class="card-list"></div>
+        </section>
+
+        <!-- S&P Tails Tab -->
+        <section id="tab-tails" class="tab-content">
+            <div id="tail-regime-info" class="info-box"></div>
+            <div id="tails-list" class="card-list"></div>
+            <div class="chart-container">
+                <h3>VIX History (24h)</h3>
+                <canvas id="vix-chart"></canvas>
+            </div>
+        </section>
+
+        <!-- Whales Tab -->
+        <section id="tab-whales" class="tab-content">
+            <div id="whale-signals" class="card-list"></div>
+        </section>
+
+        <!-- Performance Tab -->
+        <section id="tab-performance" class="tab-content">
+            <div class="chart-container">
+                <h3>Cumulative P&L</h3>
+                <canvas id="pnl-chart"></canvas>
+            </div>
+            <div class="chart-container">
+                <h3>Prediction History</h3>
+                <table id="perf-table">
+                    <thead>
+                        <tr>
+                            <th>Date</th>
+                            <th>Strategy</th>
+                            <th>Market</th>
+                            <th>Side</th>
+                            <th>Edge</th>
+                            <th>Outcome</th>
+                            <th>P&L</th>
+                        </tr>
+                    </thead>
+                    <tbody id="perf-body"></tbody>
+                </table>
+            </div>
+        </section>
+
+        <!-- Calibration Tab -->
+        <section id="tab-calibration" class="tab-content">
+            <div class="stats-grid">
+                <div class="stat-card">
+                    <div class="stat-label">Markets Analyzed</div>
+                    <div class="stat-value" id="cal-markets">--</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-label">ECE Score</div>
+                    <div class="stat-value" id="cal-ece">--</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-label">Brier Score</div>
+                    <div class="stat-value" id="cal-brier">--</div>
+                </div>
+            </div>
+            <div id="cal-bias" class="chart-container"></div>
+        </section>
+    </main>
+
+    <footer>
+        <span>PredictorX v1.0 &mdash; Predictions only, no auto-execution</span>
+    </footer>
+
+    <script src="/static/app.js"></script>
+</body>
+</html>
