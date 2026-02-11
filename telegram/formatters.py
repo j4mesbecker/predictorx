@@ -179,14 +179,19 @@ def format_status(data: dict) -> str:
 def format_spx_drop_alert(alert: dict) -> str:
     """
     Reactive SPX drop alert — backed by 6,563-day backtest.
-    Tells you exactly what happened and what to trade right now.
+    Two modes:
+      -1% / -1.5% → DIP BUY alert with call options to buy
+      -2% / -3% / -5% → Tail trade alert with premium selling + bounce trades
     """
     d = alert
     lines = []
+    drop = d["drop_pct"]
+    spy_price = d["spx_price"] / 10
 
     # ── Header: what just happened ───────────────────────────
     lines.append(
         f"<b>SPX {d['change_pct']:+.1f}%</b>  ${d['spx_price']:,.0f}"
+        f"  |  SPY ~${spy_price:.0f}"
         f"  |  VIX {d['vix_price']:.1f} ({d['regime']})"
     )
     lines.append("")
@@ -198,8 +203,43 @@ def format_spx_drop_alert(alert: dict) -> str:
         lines.append("DO NOT TRADE")
         return "\n".join(lines)
 
-    # ── Backtest stats — why this trade works ────────────────
-    drop = d["drop_pct"]
+    # ── DIP BUY mode (-1% and -1.5%) ────────────────────────
+    if drop <= 1.5:
+        bounce_pct = 98.0 if d["regime"] in ("LOW", "LOW_MED") else 95.0
+        lines.append(
+            f"<b>DIP BUY SIGNAL</b> — {bounce_pct:.0f}% bounce rate"
+            f" in {d['regime']} VIX"
+        )
+        lines.append(
+            f"{d['sample_days']:,}-day backtest: {d['regime']} dips >{drop:.0f}%"
+            f" recover within 1-2 days"
+        )
+
+        if d["cluster_warning"]:
+            lines.append("\u26a0\ufe0f Yesterday was also a big drop — be cautious")
+
+        lines.append("")
+        lines.append("<b>BUY CALLS:</b>")
+
+        call_options = d.get("call_options", [])
+        for c in call_options:
+            lines.append(f"{TOS} {c['ticker']} {c['strike']} ({c['label']})")
+            lines.append(f"   {c['note']}")
+
+        if not call_options:
+            atm_spy = round(spy_price)
+            lines.append(f"{TOS} SPY {atm_spy}C — ATM, next weekly exp")
+            lines.append(f"{TOS} SPY {atm_spy + 3}C — slightly OTM, cheaper")
+
+        lines.append("")
+        target_spx = d["spx_open"] * (1 - 0.005)  # -0.5% from open
+        target_spy = target_spx / 10
+        lines.append(f"Target: SPY ~${target_spy:.0f} (half the drop recovered)")
+        lines.append(f"Entry window: 9:30-10:30 AM CST (let IV settle)")
+
+        return "\n".join(lines)
+
+    # ── TAIL TRADE mode (-2%, -3%, -5%) ──────────────────────
     if d["hist_prob"] == 0:
         lines.append(
             f"<b>{d['win_rate']:.0%} win rate</b> selling >{drop:.0f}% tails"
@@ -220,14 +260,23 @@ def format_spx_drop_alert(alert: dict) -> str:
 
     lines.append(f"Edge: <b>{d['rating']}</b> — mkt overprices ~{d['est_market_price']:.0%} vs {d['hist_prob']:.2%} fair")
 
-    # Cluster warning (trade is still allowed, just flagged)
     if d["cluster_warning"]:
         lines.append("\u26a0\ufe0f Clustering: yesterday was a big drop — elevated risk")
 
     lines.append("")
 
-    # ── Trades to place NOW ──────────────────────────────────
-    lines.append("<b>TRADE:</b>")
+    # Bounce trade calls
+    lines.append("<b>BOUNCE TRADE:</b>")
+    call_options = d.get("call_options", [])
+    if call_options:
+        for c in call_options:
+            lines.append(f"{TOS} BUY {c['ticker']} {c['strike']} ({c['label']})")
+    else:
+        atm_spy = round(spy_price)
+        lines.append(f"{TOS} BUY SPY {atm_spy}C — ATM bounce play")
+
+    lines.append("")
+    lines.append("<b>TAIL PREMIUM:</b>")
 
     # Kalshi
     lines.append(f"{KAL} SELL YES on >{drop:.0f}% drop — collect premium")

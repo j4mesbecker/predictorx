@@ -81,7 +81,9 @@ async def check_spx_price():
     change_pct = ((price - _spx_open) / _spx_open) * 100
 
     # ── Check thresholds ─────────────────────────────────────
-    for drop_pct in [2.0, 3.0, 5.0]:
+    # 1.0% and 1.5% = dip-buy call alerts (options entry signals)
+    # 2.0%, 3.0%, 5.0% = tail trade alerts (sell premium / bounce trade)
+    for drop_pct in [1.0, 1.5, 2.0, 3.0, 5.0]:
         threshold = -drop_pct
 
         if _fired_today.get(drop_pct):
@@ -158,6 +160,25 @@ def _build_trade_alert(drop_pct: float, spx_price: float, spx_open: float,
     month_safe = month in SAFE_MONTHS
     dow_rate = DOW_DROP2_RATE.get(dow, 0.043)
 
+    # ── Dip-Buy Call Options (for -1% and -1.5% alerts) ──────
+    call_options = []
+    if drop_pct <= 1.5 and not blocked:
+        spy_price = spx_price / 10
+        qqq_est = spx_price * 0.0883  # QQQ/SPX ratio ~0.0883
+        # ATM and slightly OTM calls for Feb 20 weekly
+        atm_spy = round(spy_price)
+        atm_qqq = round(qqq_est)
+        call_options = [
+            {"ticker": "SPY", "strike": f"{atm_spy}C", "label": "ATM",
+             "note": f"SPY ~${spy_price:.0f} — buy Feb 20 exp"},
+            {"ticker": "SPY", "strike": f"{atm_spy + 3}C", "label": "+$3 OTM",
+             "note": "Cheaper, more leverage"},
+            {"ticker": "QQQ", "strike": f"{atm_qqq}C", "label": "ATM",
+             "note": f"QQQ — higher beta, buy Feb 20 exp"},
+            {"ticker": "QQQ", "strike": f"{atm_qqq + 5}C", "label": "+$5 OTM",
+             "note": "Cheaper QQQ lottery"},
+        ]
+
     # ── Build ToS trades ─────────────────────────────────────
     tos_trades = []
     if TOS_ENABLED and not blocked:
@@ -212,6 +233,7 @@ def _build_trade_alert(drop_pct: float, spx_price: float, spx_open: float,
         "month_safe": month_safe,
         "dow_rate": dow_rate,
         "tos_trades": tos_trades,
+        "call_options": call_options,
     }
 
 
