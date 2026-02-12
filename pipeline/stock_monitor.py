@@ -4,11 +4,20 @@ Polls individual stocks every 2 min during market hours (9:30 AM - 4 PM ET).
 Fires Telegram alerts when key technical levels are hit or approached.
 
 Currently tracking:
+  SPY  — S&P 500 ETF ($650 support → $675 demand → $698 ATH → $700/$720 breakout)
+  QQQ  — Nasdaq 100 ETF ($580 support → $595 demand → $637 ATH → $650 breakout)
   TSLA — Breakout play ($363 support → $441 breakout → $500/$572/$700 targets)
   NVDA — Supply/demand zones ($171 demand → $194 supply → $212 ATH)
+  PLTR — Momentum pullback ($120 demand → $150 pivot → $187 supply → $207 ATH)
 
 Alerts fire once per level per day. Proximity alerts (within 2%) fire separately.
 Each level-hit alert includes a Finviz chart image.
+
+Options trading on ThinkorSwim:
+  - All trades use naked calls/puts (buying options only)
+  - Minimum 14 DTE to avoid theta burn
+  - Entry window: 8:30 AM - 3:30 PM CST
+  - Best entry: first hour after open (8:30-9:30 AM CST)
 """
 
 import logging
@@ -16,7 +25,95 @@ from datetime import date
 
 logger = logging.getLogger(__name__)
 
+# ── SPY Key Levels (S&P 500 ETF) ───────────────────────────
+# Current: ~$681 | SMA20: $690 | SMA50: $687 | ATH: $698
+SPY_LEVELS = {
+    "SPY_SUPPORT_650": {
+        "price": 650.0,
+        "label": "3m Low Support",
+        "direction": "below",
+        "action": "MAJOR SUPPORT — 3-month low. Market-wide selloff if lost.",
+        "trade": "Do NOT buy calls yet. Wait for VIX reversion signal. Cash is a position.",
+    },
+    "SPY_DEMAND_675": {
+        "price": 675.0,
+        "label": "30d Low Demand",
+        "direction": "below",
+        "action": "DEMAND ZONE — 30-day low being tested. Buyers expected here.",
+        "trade": "BUY SPY calls 14+ DTE at current strike. Wait for CPI/catalyst to clear.",
+    },
+    "SPY_SMA50_687": {
+        "price": 687.0,
+        "label": "50-Day SMA",
+        "direction": "above",
+        "action": "ABOVE 50 SMA — Trend structure intact. Bullish.",
+        "trade": "BUY SPY calls ATM 14+ DTE. Trend following entry.",
+    },
+    "SPY_ATH_698": {
+        "price": 698.0,
+        "label": "All-Time High",
+        "direction": "above",
+        "action": "ATH TEST — $698 is the ceiling. Watch for rejection or breakout.",
+        "trade": "If breakout: BUY SPY 710C 30+ DTE. If rejection: wait for retest.",
+    },
+    "SPY_BREAKOUT_700": {
+        "price": 700.0,
+        "label": "$700 Psychological",
+        "direction": "above",
+        "action": "$700 CLEARED — Psychological breakout. Momentum accelerates.",
+        "trade": "BUY SPY 720C 30+ DTE. Trail stops. Let it run.",
+    },
+    "SPY_TARGET_720": {
+        "price": 720.0,
+        "label": "Upside Target",
+        "direction": "above",
+        "action": "$720 TARGET — Extended move. Take profits on swing positions.",
+        "trade": "Sell 75% of calls. Keep small runner for $740.",
+    },
+}
+
+# ── QQQ Key Levels (Nasdaq 100 ETF) ────────────────────────
+# Current: ~$601 | SMA20: $617 | SMA50: $619 | ATH: $637
+QQQ_LEVELS = {
+    "QQQ_SUPPORT_580": {
+        "price": 580.0,
+        "label": "3m Low Support",
+        "direction": "below",
+        "action": "MAJOR SUPPORT — 3-month low. Tech selloff accelerating.",
+        "trade": "Do NOT buy calls. Consider QQQ puts if VIX > 25. Cash.",
+    },
+    "QQQ_DEMAND_595": {
+        "price": 595.0,
+        "label": "30d Low Demand",
+        "direction": "below",
+        "action": "DEMAND ZONE — 30-day low. Tech buyers step in here historically.",
+        "trade": "BUY QQQ calls ATM 14+ DTE if VIX < 25. Higher beta than SPY.",
+    },
+    "QQQ_SMA50_619": {
+        "price": 619.0,
+        "label": "50-Day SMA",
+        "direction": "above",
+        "action": "ABOVE 50 SMA — Tech trend intact. Resume longs.",
+        "trade": "BUY QQQ calls ATM 14+ DTE. Tech leading again.",
+    },
+    "QQQ_ATH_637": {
+        "price": 637.0,
+        "label": "All-Time High",
+        "direction": "above",
+        "action": "ATH BREAKOUT — All-time high cleared. Blue sky.",
+        "trade": "BUY QQQ 650C 30+ DTE. Momentum trade into breakout.",
+    },
+    "QQQ_TARGET_650": {
+        "price": 650.0,
+        "label": "$650 Target",
+        "direction": "above",
+        "action": "$650 HIT — Extended target reached.",
+        "trade": "Sell 75% of calls. Keep runner for $670. Tighten stops.",
+    },
+}
+
 # ── TSLA Key Levels (TrendSpider / EliteOptionsTrader) ──────
+# Current: ~$417 | SMA20: $426 | SMA50: $444 | ATH: $499
 TSLA_LEVELS = {
     "TSLA_SUPPORT_363": {
         "price": 363.0,
@@ -24,6 +121,13 @@ TSLA_LEVELS = {
         "direction": "below",
         "action": "DANGER — September breakout level. If lost, next support $290.",
         "trade": "Close all TSLA longs. Do NOT buy calls.",
+    },
+    "TSLA_DEMAND_388": {
+        "price": 388.0,
+        "label": "30d Low Demand",
+        "direction": "below",
+        "action": "30-DAY LOW — Recent floor being tested. Bounce zone.",
+        "trade": "BUY TSLA calls 30+ DTE at current strike if VIX < 25.",
     },
     "TSLA_BREAKOUT_441": {
         "price": 441.0,
@@ -56,7 +160,7 @@ TSLA_LEVELS = {
 }
 
 # ── NVDA Supply/Demand Zones ────────────────────────────────
-# Based on recent price action, volume profile, and key pivots
+# Current: ~$187 | SMA20: $186 | SMA50: $184 | ATH: $212
 NVDA_LEVELS = {
     "NVDA_DEMAND_130": {
         "price": 130.0,
@@ -102,10 +206,61 @@ NVDA_LEVELS = {
     },
 }
 
+# ── PLTR Key Levels (Palantir Technologies) ─────────────────
+# Current: ~$129 | SMA20: $153 | SMA50: $171 | ATH: $207
+# Massive pullback from $207 ATH — momentum stock, volatile
+PLTR_LEVELS = {
+    "PLTR_SUPPORT_120": {
+        "price": 120.0,
+        "label": "Pullback Support",
+        "direction": "below",
+        "action": "SUPPORT TEST — Below recent 30d low. Deep pullback from $207.",
+        "trade": "Wait for stabilization. Do NOT catch falling knife. Watch $100.",
+    },
+    "PLTR_DEMAND_100": {
+        "price": 100.0,
+        "label": "$100 Psychological",
+        "direction": "below",
+        "action": "$100 BROKEN — Psychological support lost. Major correction.",
+        "trade": "If VIX < 25 and stabilizing: BUY PLTR calls 45+ DTE. High risk.",
+    },
+    "PLTR_PIVOT_150": {
+        "price": 150.0,
+        "label": "SMA20 / Pivot",
+        "direction": "above",
+        "action": "ABOVE SMA20 — Reclaiming trend. Bounce from pullback.",
+        "trade": "BUY PLTR calls 30+ DTE. Target $170 SMA50 reclaim.",
+    },
+    "PLTR_SMA50_171": {
+        "price": 171.0,
+        "label": "50-Day SMA",
+        "direction": "above",
+        "action": "ABOVE 50 SMA — Full trend recovery. Strength confirmed.",
+        "trade": "BUY PLTR 200C 45+ DTE. Momentum rebuilding toward ATH.",
+    },
+    "PLTR_SUPPLY_187": {
+        "price": 187.0,
+        "label": "Prior Consolidation",
+        "direction": "above",
+        "action": "SUPPLY CLEARED — Prior congestion zone broken.",
+        "trade": "Add to position. PLTR 220C 45+ DTE. ATH retest incoming.",
+    },
+    "PLTR_ATH_207": {
+        "price": 207.0,
+        "label": "All-Time High",
+        "direction": "above",
+        "action": "ATH BREAKOUT — All-time high cleared. Parabolic potential.",
+        "trade": "Trail stops. Let it run. Consider 250C lottos. Take partials at $230.",
+    },
+}
+
 # All tracked stocks
 WATCHED_STOCKS = {
+    "SPY": {"levels": SPY_LEVELS, "chart_ticker": "SPY"},
+    "QQQ": {"levels": QQQ_LEVELS, "chart_ticker": "QQQ"},
     "TSLA": {"levels": TSLA_LEVELS, "chart_ticker": "TSLA"},
     "NVDA": {"levels": NVDA_LEVELS, "chart_ticker": "NVDA"},
+    "PLTR": {"levels": PLTR_LEVELS, "chart_ticker": "PLTR"},
 }
 
 # Proximity alert threshold
