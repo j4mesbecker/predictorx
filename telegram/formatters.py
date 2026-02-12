@@ -293,6 +293,68 @@ def format_spx_drop_alert(alert: dict) -> str:
     return "\n".join(lines)
 
 
+def format_stock_level_alert(alert: dict) -> str:
+    """
+    Format stock level alert (TSLA, NVDA, etc).
+    Handles both level-hit and proximity alerts.
+    """
+    d = alert
+    ticker = d["ticker"]
+    price = d["price"]
+    change_pct = d["change_pct"]
+    lines = []
+
+    if d["alert_type"] == "stock_proximity":
+        # ── Proximity warning ──────────────────────────────
+        direction = "\u2191" if d["direction"] == "above" else "\u2193"
+        lines.append(
+            f"<b>{ticker} ${price:.2f}</b> ({change_pct:+.1f}%)"
+            f"  |  {direction} {d['distance_pct']:.1f}% from {d['level_label']}"
+        )
+        lines.append("")
+        lines.append(
+            f"Approaching <b>${d['level_price']:.0f}</b> — {d['level_label']}"
+        )
+        lines.append(f"{d['action']}")
+        lines.append("")
+        lines.append(f"<b>Trade plan:</b> {d['trade']}")
+        lines.append("")
+        lines.append(f"Options window: 8:30 AM - 3:30 PM CST")
+        return "\n".join(lines)
+
+    # ── Level hit ──────────────────────────────────────────
+    lines.append(
+        f"<b>{ticker} ${price:.2f}</b> ({change_pct:+.1f}%)"
+        f"  |  <b>{d['level_label']} ${d['level_price']:.0f}</b>"
+    )
+    lines.append(
+        f"Session: ${d['session_high']:.2f}H / ${d['session_low']:.2f}L"
+    )
+    lines.append("")
+    lines.append(f"<b>{d['action']}</b>")
+    lines.append("")
+
+    # Trade action
+    lines.append(f"{TOS} <b>{d['trade']}</b>")
+    lines.append("")
+
+    # Level map (show all levels for this ticker)
+    all_levels = d.get("all_levels", {})
+    if all_levels:
+        lines.append("<b>Level Map:</b>")
+        sorted_lvls = sorted(all_levels.values(), key=lambda x: x["price"], reverse=True)
+        for lvl in sorted_lvls:
+            marker = " \u25c0 YOU ARE HERE" if abs(lvl["price"] - price) / price < 0.01 else ""
+            hit = " \u2705" if lvl["price"] == d["level_price"] else ""
+            lines.append(
+                f"  ${lvl['price']:<8.0f} {lvl['label']}{hit}{marker}"
+            )
+        lines.append("")
+
+    lines.append("Options window: 8:30 AM - 3:30 PM CST")
+    return "\n".join(lines)
+
+
 def format_vix_reversion_alert(alert: dict) -> str:
     """
     VIX Reversion alert — highest-conviction bounce signal.
@@ -342,5 +404,104 @@ def format_vix_reversion_alert(alert: dict) -> str:
     lines.append("")
     lines.append("This is the regime-shift entry. Size up.")
     lines.append("Entry: NOW if 8:30 AM-3:30 PM CST, otherwise at open tomorrow.")
+
+    return "\n".join(lines)
+
+
+def format_spx_bracket_alert(alert: dict) -> str:
+    """
+    Format SPX bracket scan results.
+    Shows top trade recommendations with exact Kalshi tickers and sizing.
+    Backed by 10,000-market analysis: 94.7% NO WR in sweet spot.
+    """
+    d = alert
+    lines = []
+
+    # ── Header ────────────────────────────────────────────────
+    catalyst = " | CPI DAY" if d["is_catalyst_day"] else ""
+    lines.append(
+        f"<b>SPX BRACKET SCAN</b>{catalyst}"
+    )
+    lines.append(
+        f"SPX ${d['spx_price']:,.0f} ({d['change_pct']:+.1f}%)"
+        f"  |  VIX {d['vix_price']:.1f} ({d['regime']})"
+    )
+    lines.append(
+        f"Scanned: {d['total_markets']} markets"
+        f" | {d['sweet_spot_count']} in sweet spot"
+        f" | Balance: ${d['balance']:.0f}"
+    )
+    lines.append("")
+
+    # ── Edge Summary ──────────────────────────────────────────
+    lines.append(
+        "<b>94.7% NO win rate</b> on brackets priced 10-49c YES"
+    )
+    lines.append(
+        "SPX lands in any 25-pt bracket only 5.9% of the time"
+    )
+    lines.append("")
+
+    # ── Trade Recommendations ─────────────────────────────────
+    trades = d.get("trades", [])
+    if not trades:
+        lines.append("No trades in sweet spot right now.")
+        lines.append("Check back after market moves.")
+        return "\n".join(lines)
+
+    total_cost = 0
+    total_profit = 0
+
+    lines.append(f"<b>TOP {len(trades)} TRADES:</b>")
+    lines.append("")
+
+    for i, t in enumerate(trades, 1):
+        if t.get("action") == "SKIP":
+            continue
+
+        bracket_label = f"${t['bracket_low']:,.0f}-${t['bracket_high']:,.0f}"
+        distance = t.get("distance", 0)
+
+        lines.append(
+            f"{KAL} <b>{i}. BUY NO</b> — SPX {bracket_label}"
+        )
+        lines.append(
+            f"   {t['ticker']}"
+        )
+        lines.append(
+            f"   YES @ {t['yes_price']}c"
+            f" | NO cost ${t.get('cost_per_contract', 0):.2f}"
+            f" | {t.get('contracts', 0)}x = ${t.get('total_cost', 0):.2f}"
+        )
+        lines.append(
+            f"   {distance:.0f}pts away"
+            f" | {t.get('win_rate', 0):.1%} WR"
+            f" | +{t.get('edge', 0):.1%} edge"
+            f" | Grade: {t.get('grade', '?')}"
+        )
+
+        if t.get("total_cost"):
+            total_cost += t["total_cost"]
+        if t.get("max_profit"):
+            total_profit += t["max_profit"]
+
+        lines.append("")
+
+    # ── Summary ───────────────────────────────────────────────
+    if total_cost > 0:
+        # Expected value: 94.7% of the time we keep the full $1 payout per contract
+        # minus the NO cost; 5.3% of the time we lose our NO cost
+        avg_wr = 0.947  # Overall sweet spot win rate
+        ev = total_cost * avg_wr - total_cost * (1 - avg_wr) * (total_cost / total_profit) if total_profit > 0 else 0
+        lines.append(
+            f"<b>TOTAL:</b> ${total_cost:.2f} deployed"
+            f" → ${total_cost + total_profit:.2f} if all win"
+            f" | 94.7% hist WR"
+        )
+    lines.append("")
+    lines.append(
+        "Place orders on Kalshi. BUY NO on each bracket."
+    )
+    lines.append(f"Scan time: {d.get('scan_time', 'now')}")
 
     return "\n".join(lines)

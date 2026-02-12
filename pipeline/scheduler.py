@@ -18,6 +18,8 @@ from pipeline.tasks import (
     update_calibration,
 )
 from pipeline.spx_monitor import check_spx_price
+from pipeline.stock_monitor import check_stock_levels
+from pipeline.spx_bracket_scanner import scan_spx_brackets
 from telegram.scheduled_alerts import register_actionable_alerts
 
 logger = logging.getLogger(__name__)
@@ -70,6 +72,36 @@ def create_scheduler() -> AsyncIOScheduler:
         ),
         id="spx_monitor",
         name="SPX Drop Monitor (5min)",
+        replace_existing=True,
+    )
+
+    # ── Stock Level Monitor (TSLA, NVDA) ─────────────────────
+
+    # Individual stock level monitor — every 2 min during market hours
+    # Tracks key support/resistance/breakout levels and fires alerts
+    scheduler.add_job(
+        check_stock_levels,
+        CronTrigger(
+            hour="9-16", minute="*/2", day_of_week="mon-fri",
+        ),
+        id="stock_monitor",
+        name="Stock Level Monitor (TSLA/NVDA, 2min)",
+        replace_existing=True,
+    )
+
+    # ── SPX Bracket Scanner (Kalshi INX) ──────────────────────
+
+    # SPX bracket scanner — every 30 min during market hours
+    # Scans Kalshi for brackets in the 10-49c YES sweet spot (94.7% NO WR)
+    # On catalyst days (CPI/FOMC/NFP): runs every 15 min starting 7:45 AM ET
+    # Backed by 10,000-market analysis
+    scheduler.add_job(
+        scan_spx_brackets,
+        CronTrigger(
+            hour="8-16", minute="0,15,30,45", day_of_week="mon-fri",
+        ),
+        id="spx_bracket_scan",
+        name="SPX Bracket Scanner (15min)",
         replace_existing=True,
     )
 

@@ -76,6 +76,34 @@ class PredictorXBot:
             logger.error(f"Telegram send error: {e}")
             return False
 
+    # ── Photo Sending ──────────────────────────────────────
+
+    async def send_photo(self, photo_url: str, caption: str = "", chat_id: str = None) -> bool:
+        """Send a photo (by URL) to Telegram."""
+        if not self.configured:
+            return False
+
+        target = chat_id or self.chat_id
+        client = await self._get_client()
+
+        try:
+            payload = {"chat_id": target, "photo": photo_url}
+            if caption:
+                payload["caption"] = caption
+                payload["parse_mode"] = "HTML"
+            resp = await client.post(
+                f"{self.base_url}/sendPhoto",
+                json=payload,
+            )
+            data = resp.json()
+            if not data.get("ok"):
+                logger.error(f"Telegram photo failed: {data.get('description')}")
+                return False
+            return True
+        except Exception as e:
+            logger.error(f"Telegram photo error: {e}")
+            return False
+
     # ── Command Registration ──────────────────────────────
 
     def command(self, name: str):
