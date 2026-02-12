@@ -18,7 +18,7 @@ from pipeline.tasks import (
     update_calibration,
 )
 from pipeline.spx_monitor import check_spx_price
-from telegram.scheduler import register_scheduled_tasks
+from telegram.scheduled_alerts import register_actionable_alerts
 
 logger = logging.getLogger(__name__)
 
@@ -117,9 +117,11 @@ def create_scheduler() -> AsyncIOScheduler:
         replace_existing=True,
     )
 
-    # ── Telegram Scheduled Alerts ──────────────────────────
+    # ── Telegram Actionable Alerts ─────────────────────────
+    # Only 3 alert types: pre-market scan, trade execution, exit/cut-loss
+    # (replaces old 6-job generic alert system)
 
-    register_scheduled_tasks(scheduler)
+    register_actionable_alerts(scheduler)
 
     logger.info(f"Scheduler configured with {len(scheduler.get_jobs())} jobs")
     return scheduler

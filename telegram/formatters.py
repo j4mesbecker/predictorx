@@ -212,14 +212,14 @@ def format_spx_drop_alert(alert: dict) -> str:
         )
         lines.append(
             f"{d['sample_days']:,}-day backtest: {d['regime']} dips >{drop:.0f}%"
-            f" recover within 1-2 days"
+            f" recover within 1-5 days"
         )
 
         if d["cluster_warning"]:
-            lines.append("\u26a0\ufe0f Yesterday was also a big drop — be cautious")
+            lines.append("\u26a0\ufe0f Back-to-back red day — BLOCKED, wait for VIX reversion")
 
         lines.append("")
-        lines.append("<b>BUY CALLS:</b>")
+        lines.append("<b>BUY CALLS (at dip price, 14+ DTE):</b>")
 
         call_options = d.get("call_options", [])
         for c in call_options:
@@ -228,14 +228,15 @@ def format_spx_drop_alert(alert: dict) -> str:
 
         if not call_options:
             atm_spy = round(spy_price)
-            lines.append(f"{TOS} SPY {atm_spy}C — ATM, next weekly exp")
+            lines.append(f"{TOS} SPY {atm_spy}C — ATM at dip, 14+ DTE")
             lines.append(f"{TOS} SPY {atm_spy + 3}C — slightly OTM, cheaper")
 
         lines.append("")
         target_spx = d["spx_open"] * (1 - 0.005)  # -0.5% from open
         target_spy = target_spx / 10
         lines.append(f"Target: SPY ~${target_spy:.0f} (half the drop recovered)")
-        lines.append(f"Entry window: 9:30-10:30 AM CST (let IV settle)")
+        lines.append(f"Entry window: 8:30-9:30 AM CST (options open, let IV settle)")
+        lines.append(f"NO WEEKLIES — multi-day selloffs kill them")
 
         return "\n".join(lines)
 
@@ -288,5 +289,58 @@ def format_spx_drop_alert(alert: dict) -> str:
         else:
             margin = f" | ~${t['margin']} margin" if t.get("margin") else ""
             lines.append(f"{TOS} {t['action']} {t['instrument']}{margin}")
+
+    return "\n".join(lines)
+
+
+def format_vix_reversion_alert(alert: dict) -> str:
+    """
+    VIX Reversion alert — highest-conviction bounce signal.
+    Fires when VIX spikes above 20 then drops back below 19.
+    Backtest: Feb 5-6 pattern — VIX 21.8→20.4, SPY +1.34%, QQQ +1.58%.
+    """
+    d = alert
+    spy_price = d["spx_price"] / 10
+    lines = []
+
+    # ── Header ────────────────────────────────────────────────
+    lines.append(
+        f"<b>VIX REVERSION</b>  |  VIX {d['vix_peak']:.1f} \u2192 {d['vix_price']:.1f}"
+    )
+    lines.append(
+        f"SPX ${d['spx_price']:,.0f} ({d['change_pct']:+.1f}%)"
+        f"  |  SPY ~${spy_price:.0f}"
+        f"  |  {d['regime']}"
+    )
+    lines.append("")
+
+    if d["blocked"]:
+        for reason in d["block_reasons"]:
+            lines.append(f"\u274c {reason}")
+        lines.append("DO NOT TRADE")
+        return "\n".join(lines)
+
+    lines.append(
+        "<b>HIGH CONVICTION BUY</b> — VIX fear spike reverting"
+    )
+    lines.append(
+        f"VIX peaked {d['vix_peak']:.1f}, now crushing to {d['vix_price']:.1f}"
+    )
+    lines.append(
+        "Backtest: VIX reversion = strongest bounce signal"
+    )
+    lines.append(
+        "IV dropping = calls get cheaper AND underlying rises"
+    )
+    lines.append("")
+
+    lines.append("<b>BUY CALLS (14+ DTE):</b>")
+    for c in d.get("call_options", []):
+        lines.append(f"{TOS} {c['ticker']} {c['strike']} ({c['label']})")
+        lines.append(f"   {c['note']}")
+
+    lines.append("")
+    lines.append("This is the regime-shift entry. Size up.")
+    lines.append("Entry: NOW if 8:30 AM-3:30 PM CST, otherwise at open tomorrow.")
 
     return "\n".join(lines)

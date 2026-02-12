@@ -20,6 +20,7 @@ from typing import Optional
 from core.strategies.base import Strategy
 from core.models import Prediction
 from config.constants import KALSHI_STATIONS, CONFIDENCE_WEIGHTS
+from core.strategies.weather_edge_map import get_edge_signal, get_actual_yes_rate
 
 logger = logging.getLogger(__name__)
 
@@ -219,18 +220,23 @@ class WeatherStrategy(Strategy):
             # The further from 50%, the more overpriced Kalshi tends to be
             market_price = self._estimate_market_price(our_prob, days_ahead)
 
-            # Determine side (buy YES if we think higher prob, buy NO if lower)
-            if our_prob > market_price + 0.02:
-                side = "yes"
-                edge = our_prob - market_price
-            elif our_prob < market_price - 0.02:
-                side = "no"
-                edge = market_price - our_prob
-            else:
-                continue  # No meaningful edge
+            # Use historical edge map to determine optimal side
+            market_price_cents = int(market_price * 100)
+            month = target_date.month
 
-            # Skip if edge too small
-            if edge < 0.03:
+            edge_signal = get_edge_signal(
+                city=city_code,
+                market_price_cents=market_price_cents,
+                month=month,
+                market_type="HIGH_THRESHOLD",
+                our_probability=our_prob,
+            )
+
+            side = edge_signal["side"]
+            edge = edge_signal["edge"]
+
+            # Skip if no edge or grade F
+            if edge < 0.03 or edge_signal["grade"] == "F":
                 continue
 
             conf_factors = {
@@ -243,6 +249,14 @@ class WeatherStrategy(Strategy):
                 "source_count": source_count,
                 "std_estimate": std_est,
                 "highs": highs,
+                # Edge map data
+                "historical_side": edge_signal["side"],
+                "historical_win_rate": edge_signal["win_rate"],
+                "historical_edge": edge_signal["edge"],
+                "edge_grade": edge_signal["grade"],
+                "city_grade": edge_signal["city_grade"],
+                "month_roi": edge_signal["month_roi"],
+                "edge_reason": edge_signal["reason"],
             }
 
             pred = Prediction(
@@ -260,7 +274,7 @@ class WeatherStrategy(Strategy):
                 confidence_factors=conf_factors,
             )
 
-            # Compute composite confidence score
+            # Compute composite confidence (blends forecast + historical)
             pred.confidence_score = self._compute_confidence(pred)
 
             predictions.append(pred)
@@ -271,23 +285,19 @@ class WeatherStrategy(Strategy):
         """
         Estimate what Kalshi is pricing for this bracket.
 
-        Key insight from backtest: Kalshi weather markets tend to:
-        - Underreact to short-term forecast changes (our edge on day 0-1)
-        - Overweight climatological priors (our edge when data diverges)
-        - Have wider spreads on less liquid brackets
+        Uses historical edge map from 11,220 settled markets:
+        - Kalshi overprices YES in the 15-70c range (actual YES win rate ~20% vs implied ~40%)
+        - Market tends toward 50% (climatological mean)
+        - Shorter horizon = market lags our ensemble more
         """
         # Start with a baseline close to our prob but lagged
-        # (Kalshi updates slower than our multi-source ensemble)
         if days_ahead <= 1:
-            # Short term: market is ~3-5c behind our ensemble
             lag = 0.04
         elif days_ahead <= 3:
             lag = 0.03
         else:
             lag = 0.02
 
-        # Market tends toward 50% (climatological mean)
-        # The further our prob is from 50%, the more the market lags
         distance_from_50 = abs(our_prob - 0.50)
         pull_toward_50 = distance_from_50 * 0.15
 
@@ -296,11 +306,13 @@ class WeatherStrategy(Strategy):
         else:
             market_price = our_prob + lag + pull_toward_50
 
-        # Clamp to valid range
         return max(0.05, min(0.95, market_price))
 
     def _compute_confidence(self, pred: Prediction) -> float:
-        """Compute weighted confidence score 0.0-1.0."""
+        """
+        Compute weighted confidence score 0.0-1.0.
+        Blends live forecast signals with historical edge map data.
+        """
         factors = pred.confidence_factors
         scores = {}
 
@@ -309,14 +321,11 @@ class WeatherStrategy(Strategy):
         count_bonus = min(factors.get("source_count", 1) / 4.0, 1.0)
         scores["model_agreement"] = (agreement * 0.7 + count_bonus * 0.3)
 
-        # Historical accuracy (by city)
-        city_reliability = {
-            "SFO": 0.95, "CHI": 0.90, "DEN": 0.85,
-            "NYC": 0.85, "MIA": 0.80, "AUS": 0.70, "PHI": 0.70,
-        }
-        scores["historical_accuracy"] = city_reliability.get(
-            factors.get("city", ""), 0.75
-        )
+        # Historical edge map confidence (from 11,220 settled markets)
+        hist_wr = factors.get("historical_win_rate", 0.5)
+        city_grade = factors.get("city_grade", "B")
+        grade_score = {"A+": 1.0, "A": 0.85, "B": 0.65, "C": 0.45, "F": 0.2}
+        scores["historical_edge"] = (hist_wr * 0.6 + grade_score.get(city_grade, 0.5) * 0.4)
 
         # Edge magnitude
         edge = abs(pred.edge)
@@ -331,13 +340,18 @@ class WeatherStrategy(Strategy):
         horizon_decay = {0: 1.0, 1: 0.95, 2: 0.85, 3: 0.70, 4: 0.55, 5: 0.40}
         scores["horizon"] = horizon_decay.get(horizon, 0.40)
 
-        # Weighted composite
+        # Monthly strength (from historical edge map)
+        month_roi = factors.get("month_roi", 0.0)
+        scores["month_strength"] = min(max(month_roi + 0.3, 0) / 0.6, 1.0)
+
+        # Weighted composite — historical data gets significant weight
         weights = {
-            "model_agreement": 0.30,
-            "historical_accuracy": 0.20,
-            "edge_magnitude": 0.20,
-            "data_quality": 0.15,
-            "horizon": 0.15,
+            "model_agreement": 0.20,
+            "historical_edge": 0.30,  # Historical edge map is our strongest signal
+            "edge_magnitude": 0.15,
+            "data_quality": 0.10,
+            "horizon": 0.10,
+            "month_strength": 0.15,
         }
 
         total = sum(scores.get(k, 0) * w for k, w in weights.items())
