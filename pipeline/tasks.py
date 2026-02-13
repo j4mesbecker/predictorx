@@ -298,22 +298,21 @@ async def generate_predictions():
 
 
 async def _execute_weather_trades(predictions: list):
-    """Auto-execute weather predictions on Kalshi."""
-    from pipeline.kalshi_executor import place_order, send_trade_notification, get_balance
+    """Send weather trade opportunities to Telegram for approval."""
+    from telegram.trade_approvals import send_batch_for_approval
 
-    balance = get_balance()
-    executed = 0
-    max_weather_per_scan = 5  # Don't flood with weather trades
+    max_weather_per_scan = 5
 
     # Sort by edge (highest first), take top N
     predictions.sort(key=lambda p: p.edge, reverse=True)
     top = predictions[:max_weather_per_scan]
 
+    approval_trades = []
     for pred in top:
         side = pred.side
         market_price_cents = int(pred.market_price * 100)
 
-        # Calculate contracts: max $15 per weather trade (more conservative than SPX)
+        # Calculate contracts: max $15 per weather trade
         max_cost = 15.0
         if side == "no":
             cost_per_contract_cents = 100 - market_price_cents
@@ -323,44 +322,41 @@ async def _execute_weather_trades(predictions: list):
         if cost_per_contract_cents <= 0:
             continue
 
-        cost_per_contract = cost_per_contract_cents / 100.0
-        contracts = max(1, int(max_cost / cost_per_contract))
+        contracts = max(1, int(max_cost / (cost_per_contract_cents / 100.0)))
 
-        # Verify the market exists on Kalshi before trying to trade
+        # Verify market exists on Kalshi and get live prices
         try:
             from pipeline.spx_bracket_scanner import _kalshi_get
             market_data = _kalshi_get(f"/markets/{pred.market_ticker}")
             if not market_data or not market_data.get("market"):
-                logger.debug(f"Weather market {pred.market_ticker} not found on Kalshi, skipping")
                 continue
-            # Use live price instead of estimated price
             live_market = market_data["market"]
             if side == "no":
-                live_yes_ask = live_market.get("yes_ask", 0)
-                if live_yes_ask > 0:
-                    cost_per_contract_cents = 100 - live_yes_ask
-                    cost_per_contract = cost_per_contract_cents / 100.0
-                    contracts = max(1, int(max_cost / cost_per_contract))
-                    market_price_cents = live_yes_ask
+                no_ask = live_market.get("no_ask", 0) or 0
+                if no_ask > 0:
+                    cost_per_contract_cents = no_ask
+                    contracts = max(1, int(max_cost / (no_ask / 100.0)))
             else:
-                live_yes_ask = live_market.get("yes_ask", 0)
-                if live_yes_ask > 0:
-                    cost_per_contract_cents = live_yes_ask
-                    cost_per_contract = cost_per_contract_cents / 100.0
-                    contracts = max(1, int(max_cost / cost_per_contract))
-                    market_price_cents = live_yes_ask
+                yes_ask = live_market.get("yes_ask", 0) or 0
+                if yes_ask > 0:
+                    cost_per_contract_cents = yes_ask
+                    contracts = max(1, int(max_cost / (yes_ask / 100.0)))
         except Exception as e:
             logger.debug(f"Could not verify weather market {pred.market_ticker}: {e}")
             continue
 
         city = pred.confidence_factors.get("city", "?")
-        result = place_order(
-            ticker=pred.market_ticker,
-            side=side,
-            contracts=contracts,
-            price_cents=cost_per_contract_cents,
-            strategy="weather",
-            metadata={
+        approval_trades.append({
+            "ticker": pred.market_ticker,
+            "side": side,
+            "contracts": contracts,
+            "price_cents": cost_per_contract_cents,
+            "description": (
+                f"{city} | {pred.market_title}"
+                f" | {pred.edge:.1%} edge"
+                f" | {pred.confidence_score:.0%} conf"
+            ),
+            "metadata": {
                 "city": city,
                 "edge": pred.edge,
                 "confidence": pred.confidence_score,
@@ -368,20 +364,14 @@ async def _execute_weather_trades(predictions: list):
                 "grade": pred.confidence_factors.get("edge_grade", ""),
                 "consensus_high": pred.confidence_factors.get("consensus_high", 0),
             },
+        })
+
+    if approval_trades:
+        await send_batch_for_approval(
+            approval_trades, "weather",
+            f"{len(approval_trades)} weather trades found with 60%+ confidence",
         )
-
-        extra = (
-            f"{city} | {pred.market_title}"
-            f" | {pred.edge:.1%} edge"
-            f" | {pred.confidence_score:.0%} conf"
-        )
-        await send_trade_notification(result, "weather", extra)
-
-        if result.get("status") == "filled":
-            executed += 1
-
-    if executed > 0:
-        logger.warning(f"WEATHER AUTO-EXEC: {executed}/{len(top)} orders filled")
+        logger.warning(f"WEATHER: Sent {len(approval_trades)} trades for approval")
 
 
 # ── Prediction Settlement ──────────────────────────────────

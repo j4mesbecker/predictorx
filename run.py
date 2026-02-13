@@ -57,6 +57,7 @@ async def start_bot():
     """Start the Telegram bot polling loop."""
     from telegram.bot import get_bot
     from telegram.commands import register_all_commands
+    from telegram.trade_approvals import register_trade_callbacks
 
     bot = get_bot()
     if not bot.configured:
@@ -65,6 +66,7 @@ async def start_bot():
         return
 
     register_all_commands()
+    register_trade_callbacks(bot)
     logger.info("Starting PredictorX Telegram bot...")
     await bot.start_polling()
 

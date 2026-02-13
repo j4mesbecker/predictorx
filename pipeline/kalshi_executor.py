@@ -207,13 +207,61 @@ def place_order(
 
         response = portfolio.create_order(**order_kwargs)
 
+        # Extract order details from response
         order_id = None
+        order_status = "unknown"
+        fill_count = 0
+        remaining_count = contracts
+
         if hasattr(response, 'order') and response.order:
-            order_id = response.order.order_id if hasattr(response.order, 'order_id') else None
+            o = response.order
+            order_id = getattr(o, 'order_id', None)
+            order_status = getattr(o, 'status', 'unknown')
+            fill_count = getattr(o, 'fill_count', 0) or 0
+            remaining_count = getattr(o, 'remaining_count', contracts) or 0
+
+        # If SDK doesn't give us status, check via raw API
+        if order_id and order_status in ("unknown", ""):
+            try:
+                from pipeline.spx_bracket_scanner import _kalshi_get
+                order_check = _kalshi_get(f"/portfolio/orders/{order_id}")
+                o_data = order_check.get("order", order_check)
+                order_status = o_data.get("status", "unknown")
+                fill_count = o_data.get("fill_count", 0) or 0
+                remaining_count = o_data.get("remaining_count", 0) or 0
+            except Exception:
+                pass
+
+        # Determine actual fill status
+        if order_status == "executed" or (fill_count > 0 and remaining_count == 0):
+            actual_status = "filled"
+        elif order_status == "resting" or remaining_count > 0:
+            actual_status = "resting"
+            # If order is resting (not filled), wait briefly then recheck
+            time.sleep(2)
+            try:
+                from pipeline.spx_bracket_scanner import _kalshi_get
+                order_check = _kalshi_get(f"/portfolio/orders/{order_id}")
+                o_data = order_check.get("order", order_check)
+                order_status = o_data.get("status", "unknown")
+                fill_count = o_data.get("fill_count", 0) or 0
+                remaining_count = o_data.get("remaining_count", 0) or 0
+                if order_status == "executed":
+                    actual_status = "filled"
+                elif order_status == "canceled":
+                    actual_status = "canceled"
+            except Exception:
+                pass
+        elif order_status == "canceled":
+            actual_status = "canceled"
+        else:
+            actual_status = order_status
 
         # Update tracking
         _executed_tickers.add(ticker)
-        _deployed_today += cost
+        if actual_status == "filled":
+            _deployed_today += cost
+
         trade_record = {
             "timestamp": datetime.now().isoformat(),
             "ticker": ticker,
@@ -223,7 +271,10 @@ def place_order(
             "cost": cost,
             "strategy": strategy,
             "order_id": order_id,
-            "status": "filled",
+            "status": actual_status,
+            "kalshi_status": order_status,
+            "fill_count": fill_count,
+            "remaining_count": remaining_count,
             "metadata": metadata or {},
         }
         _trades_today.append(trade_record)
@@ -232,16 +283,23 @@ def place_order(
         _log_trade(trade_record)
 
         result = {
-            "status": "filled",
+            "status": actual_status,
             "order_id": order_id,
             "ticker": ticker,
             "side": side,
             "contracts": contracts,
             "price_cents": price_cents,
             "cost": cost,
+            "kalshi_status": order_status,
+            "fill_count": fill_count,
         }
 
-        logger.warning(f"ORDER FILLED: {ticker} BUY {side.upper()} {contracts}x @ {price_cents}c = ${cost:.2f}")
+        if actual_status == "filled":
+            logger.warning(f"ORDER FILLED: {ticker} BUY {side.upper()} {contracts}x @ {price_cents}c = ${cost:.2f}")
+        elif actual_status == "resting":
+            logger.warning(f"ORDER RESTING: {ticker} BUY {side.upper()} {contracts}x @ {price_cents}c — waiting for fill")
+        else:
+            logger.warning(f"ORDER {actual_status.upper()}: {ticker} BUY {side.upper()} {contracts}x @ {price_cents}c")
         return result
 
     except Exception as e:

@@ -26,6 +26,7 @@ class PredictorXBot:
         self.chat_id = settings.telegram_chat_id
         self.base_url = self.BASE_URL.format(token=self.token)
         self._handlers: dict[str, Callable] = {}
+        self._callback_handlers: dict[str, Callable] = {}
         self._offset: int = 0
         self._running = False
         self._client: Optional[httpx.AsyncClient] = None
@@ -41,8 +42,11 @@ class PredictorXBot:
 
     # ── Message Sending ───────────────────────────────────
 
-    async def send_message(self, text: str, chat_id: str = None, parse_mode: str = "HTML") -> bool:
-        """Send a message to Telegram."""
+    async def send_message(
+        self, text: str, chat_id: str = None, parse_mode: str = "HTML",
+        reply_markup: dict = None,
+    ) -> dict | bool:
+        """Send a message to Telegram. Returns message dict if reply_markup used."""
         if not self.configured:
             logger.warning("Telegram not configured, skipping message")
             return False
@@ -51,29 +55,69 @@ class PredictorXBot:
         client = await self._get_client()
 
         try:
+            payload = {
+                "chat_id": target,
+                "text": text,
+                "parse_mode": parse_mode,
+                "disable_web_page_preview": True,
+            }
+            if reply_markup:
+                payload["reply_markup"] = reply_markup
+
             resp = await client.post(
                 f"{self.base_url}/sendMessage",
-                json={
-                    "chat_id": target,
-                    "text": text,
-                    "parse_mode": parse_mode,
-                    "disable_web_page_preview": True,
-                },
+                json=payload,
             )
             data = resp.json()
             if not data.get("ok"):
                 # Fallback to plain text if HTML parsing fails
                 if "can't parse" in str(data.get("description", "")):
+                    payload.pop("parse_mode", None)
+                    payload.pop("reply_markup", None)
                     resp = await client.post(
                         f"{self.base_url}/sendMessage",
-                        json={"chat_id": target, "text": text},
+                        json=payload,
                     )
                     return resp.json().get("ok", False)
                 logger.error(f"Telegram send failed: {data.get('description')}")
                 return False
+            if reply_markup:
+                return data.get("result", True)
             return True
         except Exception as e:
             logger.error(f"Telegram send error: {e}")
+            return False
+
+    async def answer_callback_query(self, callback_query_id: str, text: str = "") -> bool:
+        """Answer a callback query (acknowledge button press)."""
+        client = await self._get_client()
+        try:
+            resp = await client.post(
+                f"{self.base_url}/answerCallbackQuery",
+                json={"callback_query_id": callback_query_id, "text": text},
+            )
+            return resp.json().get("ok", False)
+        except Exception:
+            return False
+
+    async def edit_message_text(
+        self, chat_id: str, message_id: int, text: str, parse_mode: str = "HTML",
+    ) -> bool:
+        """Edit an existing message's text (removes inline keyboard too)."""
+        client = await self._get_client()
+        try:
+            resp = await client.post(
+                f"{self.base_url}/editMessageText",
+                json={
+                    "chat_id": chat_id,
+                    "message_id": message_id,
+                    "text": text,
+                    "parse_mode": parse_mode,
+                    "disable_web_page_preview": True,
+                },
+            )
+            return resp.json().get("ok", False)
+        except Exception:
             return False
 
     # ── Photo Sending ──────────────────────────────────────
@@ -116,6 +160,10 @@ class PredictorXBot:
     def register_command(self, name: str, handler: Callable):
         """Register a command handler programmatically."""
         self._handlers[name] = handler
+
+    def register_callback(self, prefix: str, handler: Callable):
+        """Register a callback query handler for a button prefix."""
+        self._callback_handlers[prefix] = handler
 
     # ── Polling ───────────────────────────────────────────
 
@@ -172,7 +220,34 @@ class PredictorXBot:
             pass  # Normal for long polling
 
     async def _handle_update(self, update: dict):
-        """Process a single update."""
+        """Process a single update (message or callback query)."""
+
+        # ── Handle callback queries (inline button presses) ──
+        callback = update.get("callback_query")
+        if callback:
+            cb_id = callback.get("id", "")
+            cb_data = callback.get("data", "")
+            cb_message = callback.get("message", {})
+            cb_chat_id = str(cb_message.get("chat", {}).get("id", ""))
+            cb_message_id = cb_message.get("message_id", 0)
+
+            # Match callback data to a registered handler by prefix
+            handled = False
+            for prefix, handler in self._callback_handlers.items():
+                if cb_data.startswith(prefix):
+                    try:
+                        await handler(cb_chat_id, cb_message_id, cb_data, cb_id)
+                        handled = True
+                    except Exception as e:
+                        logger.error(f"Callback handler error ({prefix}): {e}")
+                        await self.answer_callback_query(cb_id, f"Error: {e}")
+                    break
+
+            if not handled:
+                await self.answer_callback_query(cb_id, "Unknown action")
+            return
+
+        # ── Handle text messages / commands ──
         message = update.get("message", {})
         text = message.get("text", "").strip()
         chat_id = str(message.get("chat", {}).get("id", ""))

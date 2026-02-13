@@ -281,8 +281,9 @@ async def scan_spx_brackets(force: bool = False):
     today_str = today.strftime("%Y-%m-%d")
     is_catalyst_day = today_str in BLACKOUT_DATES
 
-    # Limit scans per day (catalyst days get more)
-    max_scans = 8 if is_catalyst_day else 4
+    # Limit scans per day — generous since we require user approval now
+    # Morning window (8-10 AM ET) is most important, but keep scanning all day
+    max_scans = 20 if is_catalyst_day else 12
     if _scans_today >= max_scans and not force:
         return
 
@@ -369,34 +370,67 @@ async def scan_spx_brackets(force: bool = False):
         rec["distance"] = m["distance"]
         trades.append(rec)
 
-    # ── AUTO-EXECUTE: Place orders on Kalshi ─────────────────
-    from pipeline.kalshi_executor import place_order, send_trade_notification
+    # ── SEND FOR APPROVAL: Alert user on Telegram with APPROVE/SKIP buttons ──
+    from telegram.trade_approvals import send_batch_for_approval
 
-    executed = []
+    # Fetch live orderbook prices for each ticker so we show real costs
+    approval_trades = []
     for t in trades:
         if t.get("action") == "SKIP":
             continue
 
         side = t.get("side", "no")
         contracts = t.get("contracts", 0)
-        yes_price = t["yes_price"]
 
         if contracts <= 0:
             continue
 
-        # For NO orders: price is 100 - yes_price
-        if side == "no":
-            price_cents = 100 - yes_price
-        else:
-            price_cents = yes_price
+        ticker = t["ticker"]
 
-        result = place_order(
-            ticker=t["ticker"],
-            side=side,
-            contracts=contracts,
-            price_cents=price_cents,
-            strategy="spx_bracket",
-            metadata={
+        # Get live price from orderbook
+        try:
+            mkt = _kalshi_get(f"/markets/{ticker}")["market"]
+            no_ask = mkt.get("no_ask", 0) or 0
+            no_bid = mkt.get("no_bid", 0) or 0
+            yes_ask = mkt.get("yes_ask", 0) or 0
+            yes_bid = mkt.get("yes_bid", 0) or 0
+        except Exception as e:
+            logger.warning(f"Could not fetch live price for {ticker}: {e}")
+            continue
+
+        if side == "no":
+            price_cents = no_ask
+            if price_cents <= 0:
+                price_cents = 100 - (yes_bid or t["yes_price"])
+        else:
+            price_cents = yes_ask
+            if price_cents <= 0:
+                price_cents = t["yes_price"]
+
+        # Skip if NO price is too high (no profit margin)
+        if side == "no" and price_cents > 92:
+            logger.info(f"Skipping {ticker}: NO ask {price_cents}c too high")
+            continue
+
+        # Recalculate contracts based on live price
+        if price_cents > 0:
+            max_cost = min(20.0, t.get("cost", 20.0))
+            contracts = int((max_cost * 100) / price_cents)
+            if contracts <= 0:
+                continue
+
+        approval_trades.append({
+            "ticker": ticker,
+            "side": side,
+            "contracts": contracts,
+            "price_cents": price_cents,
+            "description": (
+                f"SPX {t['bracket_low']:,.0f}-{t['bracket_high']:,.0f}"
+                f" | {t['distance']:.0f}pts away"
+                f" | {t.get('win_rate', 0):.1%} WR"
+                f" | Grade: {t.get('grade', '?')}"
+            ),
+            "metadata": {
                 "bracket_low": t["bracket_low"],
                 "bracket_high": t["bracket_high"],
                 "distance": t["distance"],
@@ -405,51 +439,35 @@ async def scan_spx_brackets(force: bool = False):
                 "grade": t.get("grade", ""),
                 "spx_price": spx_price,
                 "vix": vix_price,
+                "live_no_ask": no_ask,
+                "live_yes_ask": yes_ask,
             },
+        })
+
+    filled_count = 0
+    if approval_trades:
+        summary = (
+            f"SPX @ {spx_price:,.0f} ({change_pct:+.1f}%)"
+            f" | VIX {vix_price:.1f} ({regime})"
+            f" | {len(approval_trades)} brackets in sweet spot"
+        )
+        await send_batch_for_approval(approval_trades, "spx_bracket", summary)
+        logger.warning(
+            f"SPX BRACKET: Sent {len(approval_trades)} trades for approval "
+            f"(SPX {spx_price:,.0f})"
         )
 
-        t["execution"] = result
-        executed.append(result)
-
-        # Send individual trade notification
-        extra = (
-            f"SPX {t['bracket_low']:,.0f}-{t['bracket_high']:,.0f}"
-            f" | {t['distance']:.0f}pts away"
-            f" | {t.get('win_rate', 0):.1%} WR"
-            f" | Grade: {t.get('grade', '?')}"
+    # Log scan results (the approval message IS the alert now)
+    if not approval_trades:
+        logger.info(
+            f"SPX BRACKET SCAN: no viable trades "
+            f"from {len(sweet_spot)} sweet spot "
+            f"(SPX {spx_price:,.0f}, {change_pct:+.1f}%)"
         )
-        await send_trade_notification(result, "spx_bracket", extra)
-
-    filled_count = sum(1 for r in executed if r.get("status") == "filled")
-
-    # ── Build and send summary alert ──────────────────────────
-    alert = {
-        "alert_type": "spx_bracket_scan",
-        "spx_price": spx_price,
-        "change_pct": change_pct,
-        "vix_price": vix_price,
-        "regime": regime,
-        "balance": balance,
-        "is_catalyst_day": is_catalyst_day,
-        "total_markets": len(markets),
-        "sweet_spot_count": len(sweet_spot),
-        "trades": trades,
-        "scan_time": datetime.now().strftime("%I:%M %p CST"),
-        "auto_executed": True,
-        "filled_count": filled_count,
-        "total_attempted": len(executed),
-    }
-
-    await _send_bracket_alert(alert)
-    logger.warning(
-        f"SPX BRACKET SCAN: {filled_count}/{len(executed)} orders filled "
-        f"from {len(sweet_spot)} sweet spot "
-        f"(SPX {spx_price:,.0f}, {change_pct:+.1f}%)"
-    )
 
 
 async def _send_bracket_alert(alert: dict):
-    """Format and send SPX bracket alert via Telegram."""
+    """Format and send SPX bracket alert via Telegram (legacy, kept for compatibility)."""
     from telegram.bot import get_bot
     from telegram.formatters import format_spx_bracket_alert
 
