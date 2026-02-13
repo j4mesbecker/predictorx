@@ -32,7 +32,7 @@ logger = logging.getLogger(__name__)
 MAX_PER_TRADE = 20.0        # Max $ per single trade (user wants to start small)
 MAX_DAILY_DEPLOYED = 200.0  # Max total $ deployed per day across all trades
 MAX_TRADES_PER_DAY = 15     # Max number of orders per day
-BALANCE_FLOOR = 500.0       # Never let balance drop below this
+BALANCE_FLOOR = 650.0       # Never let balance drop below this
 MAX_DAILY_LOSS = 50.0       # Stop trading if daily realized loss exceeds this
 
 # ── State Tracking ──────────────────────────────────────────
