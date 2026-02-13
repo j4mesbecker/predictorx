@@ -263,7 +263,7 @@ async def fetch_whale_activity():
 
 
 async def generate_predictions():
-    """Run all strategies and store new predictions."""
+    """Run all strategies, store predictions, and auto-execute weather trades."""
     logger.info("Generating predictions...")
     repo = _get_repo()
 
@@ -275,16 +275,113 @@ async def generate_predictions():
         opportunities = await registry.scan_all(balance=settings.starting_capital)
 
         saved = 0
+        weather_to_execute = []
+
         for opp in opportunities:
             pred = opp.prediction
             if pred.edge > 0 and pred.confidence_score >= 0.50:
                 repo.save_prediction(pred)
                 saved += 1
 
+                # Collect weather trades for auto-execution
+                if pred.strategy == "weather" and pred.confidence_score >= 0.60:
+                    weather_to_execute.append(pred)
+
         logger.info(f"Generated {len(opportunities)} opportunities, saved {saved} predictions")
+
+        # Auto-execute weather trades on Kalshi
+        if weather_to_execute:
+            await _execute_weather_trades(weather_to_execute)
 
     except Exception as e:
         logger.error(f"Prediction generation error: {e}")
+
+
+async def _execute_weather_trades(predictions: list):
+    """Auto-execute weather predictions on Kalshi."""
+    from pipeline.kalshi_executor import place_order, send_trade_notification, get_balance
+
+    balance = get_balance()
+    executed = 0
+    max_weather_per_scan = 5  # Don't flood with weather trades
+
+    # Sort by edge (highest first), take top N
+    predictions.sort(key=lambda p: p.edge, reverse=True)
+    top = predictions[:max_weather_per_scan]
+
+    for pred in top:
+        side = pred.side
+        market_price_cents = int(pred.market_price * 100)
+
+        # Calculate contracts: max $15 per weather trade (more conservative than SPX)
+        max_cost = 15.0
+        if side == "no":
+            cost_per_contract_cents = 100 - market_price_cents
+        else:
+            cost_per_contract_cents = market_price_cents
+
+        if cost_per_contract_cents <= 0:
+            continue
+
+        cost_per_contract = cost_per_contract_cents / 100.0
+        contracts = max(1, int(max_cost / cost_per_contract))
+
+        # Verify the market exists on Kalshi before trying to trade
+        try:
+            from pipeline.spx_bracket_scanner import _kalshi_get
+            market_data = _kalshi_get(f"/markets/{pred.market_ticker}")
+            if not market_data or not market_data.get("market"):
+                logger.debug(f"Weather market {pred.market_ticker} not found on Kalshi, skipping")
+                continue
+            # Use live price instead of estimated price
+            live_market = market_data["market"]
+            if side == "no":
+                live_yes_ask = live_market.get("yes_ask", 0)
+                if live_yes_ask > 0:
+                    cost_per_contract_cents = 100 - live_yes_ask
+                    cost_per_contract = cost_per_contract_cents / 100.0
+                    contracts = max(1, int(max_cost / cost_per_contract))
+                    market_price_cents = live_yes_ask
+            else:
+                live_yes_ask = live_market.get("yes_ask", 0)
+                if live_yes_ask > 0:
+                    cost_per_contract_cents = live_yes_ask
+                    cost_per_contract = cost_per_contract_cents / 100.0
+                    contracts = max(1, int(max_cost / cost_per_contract))
+                    market_price_cents = live_yes_ask
+        except Exception as e:
+            logger.debug(f"Could not verify weather market {pred.market_ticker}: {e}")
+            continue
+
+        city = pred.confidence_factors.get("city", "?")
+        result = place_order(
+            ticker=pred.market_ticker,
+            side=side,
+            contracts=contracts,
+            price_cents=cost_per_contract_cents,
+            strategy="weather",
+            metadata={
+                "city": city,
+                "edge": pred.edge,
+                "confidence": pred.confidence_score,
+                "win_rate": pred.confidence_factors.get("historical_win_rate", 0),
+                "grade": pred.confidence_factors.get("edge_grade", ""),
+                "consensus_high": pred.confidence_factors.get("consensus_high", 0),
+            },
+        )
+
+        extra = (
+            f"{city} | {pred.market_title}"
+            f" | {pred.edge:.1%} edge"
+            f" | {pred.confidence_score:.0%} conf"
+        )
+        await send_trade_notification(result, "weather", extra)
+
+        if result.get("status") == "filled":
+            executed += 1
+
+    if executed > 0:
+        logger.warning(f"WEATHER AUTO-EXEC: {executed}/{len(top)} orders filled")
 
 
 # ── Prediction Settlement ──────────────────────────────────

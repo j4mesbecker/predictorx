@@ -452,7 +452,13 @@ def format_spx_bracket_alert(alert: dict) -> str:
     total_cost = 0
     total_profit = 0
 
-    lines.append(f"<b>TOP {len(trades)} TRADES:</b>")
+    auto = d.get("auto_executed", False)
+    if auto:
+        filled = d.get("filled_count", 0)
+        attempted = d.get("total_attempted", 0)
+        lines.append(f"<b>AUTO-EXECUTED: {filled}/{attempted} orders filled</b>")
+    else:
+        lines.append(f"<b>TOP {len(trades)} TRADES:</b>")
     lines.append("")
 
     for i, t in enumerate(trades, 1):
@@ -462,8 +468,19 @@ def format_spx_bracket_alert(alert: dict) -> str:
         bracket_label = f"${t['bracket_low']:,.0f}-${t['bracket_high']:,.0f}"
         distance = t.get("distance", 0)
 
+        # Execution status marker
+        exec_result = t.get("execution", {})
+        if exec_result.get("status") == "filled":
+            status_mark = "\u2705"
+        elif exec_result.get("status") == "blocked":
+            status_mark = "\U0001f6ab"
+        elif exec_result.get("status") == "error":
+            status_mark = "\u274c"
+        else:
+            status_mark = KAL
+
         lines.append(
-            f"{KAL} <b>{i}. BUY NO</b> — SPX {bracket_label}"
+            f"{status_mark} <b>{i}. BUY NO</b> — SPX {bracket_label}"
         )
         lines.append(
             f"   {t['ticker']}"
@@ -480,6 +497,11 @@ def format_spx_bracket_alert(alert: dict) -> str:
             f" | Grade: {t.get('grade', '?')}"
         )
 
+        if exec_result.get("status") == "blocked":
+            lines.append(f"   BLOCKED: {exec_result.get('reason', '')}")
+        elif exec_result.get("status") == "error":
+            lines.append(f"   ERROR: {exec_result.get('error', '')[:60]}")
+
         if t.get("total_cost"):
             total_cost += t["total_cost"]
         if t.get("max_profit"):
@@ -489,19 +511,18 @@ def format_spx_bracket_alert(alert: dict) -> str:
 
     # ── Summary ───────────────────────────────────────────────
     if total_cost > 0:
-        # Expected value: 94.7% of the time we keep the full $1 payout per contract
-        # minus the NO cost; 5.3% of the time we lose our NO cost
-        avg_wr = 0.947  # Overall sweet spot win rate
-        ev = total_cost * avg_wr - total_cost * (1 - avg_wr) * (total_cost / total_profit) if total_profit > 0 else 0
+        avg_wr = 0.947
         lines.append(
             f"<b>TOTAL:</b> ${total_cost:.2f} deployed"
-            f" → ${total_cost + total_profit:.2f} if all win"
+            f" \u2192 ${total_cost + total_profit:.2f} if all win"
             f" | 94.7% hist WR"
         )
-    lines.append("")
-    lines.append(
-        "Place orders on Kalshi. BUY NO on each bracket."
-    )
+    if auto:
+        lines.append("")
+        lines.append("Orders placed automatically. Monitor on Kalshi.")
+    else:
+        lines.append("")
+        lines.append("Place orders on Kalshi. BUY NO on each bracket.")
     lines.append(f"Scan time: {d.get('scan_time', 'now')}")
 
     return "\n".join(lines)

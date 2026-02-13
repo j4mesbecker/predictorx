@@ -349,7 +349,7 @@ async def scan_spx_brackets(force: bool = False):
     except Exception:
         pass
 
-    # ── Build and send alert ─────────────────────────────────
+    # ── Build trade recommendations ──────────────────────────
     from core.strategies.spx_edge_map import get_spx_trade_recommendation
 
     trades = []
@@ -369,6 +369,60 @@ async def scan_spx_brackets(force: bool = False):
         rec["distance"] = m["distance"]
         trades.append(rec)
 
+    # ── AUTO-EXECUTE: Place orders on Kalshi ─────────────────
+    from pipeline.kalshi_executor import place_order, send_trade_notification
+
+    executed = []
+    for t in trades:
+        if t.get("action") == "SKIP":
+            continue
+
+        side = t.get("side", "no")
+        contracts = t.get("contracts", 0)
+        yes_price = t["yes_price"]
+
+        if contracts <= 0:
+            continue
+
+        # For NO orders: price is 100 - yes_price
+        if side == "no":
+            price_cents = 100 - yes_price
+        else:
+            price_cents = yes_price
+
+        result = place_order(
+            ticker=t["ticker"],
+            side=side,
+            contracts=contracts,
+            price_cents=price_cents,
+            strategy="spx_bracket",
+            metadata={
+                "bracket_low": t["bracket_low"],
+                "bracket_high": t["bracket_high"],
+                "distance": t["distance"],
+                "win_rate": t.get("win_rate", 0),
+                "edge": t.get("edge", 0),
+                "grade": t.get("grade", ""),
+                "spx_price": spx_price,
+                "vix": vix_price,
+            },
+        )
+
+        t["execution"] = result
+        executed.append(result)
+
+        # Send individual trade notification
+        extra = (
+            f"SPX {t['bracket_low']:,.0f}-{t['bracket_high']:,.0f}"
+            f" | {t['distance']:.0f}pts away"
+            f" | {t.get('win_rate', 0):.1%} WR"
+            f" | Grade: {t.get('grade', '?')}"
+        )
+        await send_trade_notification(result, "spx_bracket", extra)
+
+    filled_count = sum(1 for r in executed if r.get("status") == "filled")
+
+    # ── Build and send summary alert ──────────────────────────
     alert = {
         "alert_type": "spx_bracket_scan",
         "spx_price": spx_price,
@@ -381,11 +435,15 @@ async def scan_spx_brackets(force: bool = False):
         "sweet_spot_count": len(sweet_spot),
         "trades": trades,
         "scan_time": datetime.now().strftime("%I:%M %p CST"),
+        "auto_executed": True,
+        "filled_count": filled_count,
+        "total_attempted": len(executed),
     }
 
     await _send_bracket_alert(alert)
     logger.warning(
-        f"SPX BRACKET SCAN: {len(trades)} trades from {len(sweet_spot)} sweet spot "
+        f"SPX BRACKET SCAN: {filled_count}/{len(executed)} orders filled "
+        f"from {len(sweet_spot)} sweet spot "
         f"(SPX {spx_price:,.0f}, {change_pct:+.1f}%)"
     )
 
