@@ -141,6 +141,29 @@ BLACKOUT_DATES = [
     "2026-12-15", "2026-12-16",
 ]
 
+# Catalyst labels + guidance for daily TOS intel
+BLACKOUT_LABELS = {
+    "2026-01-28": {"name": "FOMC Day 1", "time": "2:00 PM ET", "guidance": "Wait for statement, enter after 2:30 PM ET"},
+    "2026-01-29": {"name": "FOMC Decision", "time": "2:00 PM ET", "guidance": "Wait for statement, enter after 2:30 PM ET"},
+    "2026-02-13": {"name": "CPI", "time": "8:30 AM ET", "guidance": "Wait for data, enter 9:30-10:00 AM CST"},
+    "2026-03-12": {"name": "CPI", "time": "8:30 AM ET", "guidance": "Wait for data, enter 9:30-10:00 AM CST"},
+    "2026-03-17": {"name": "FOMC Day 1", "time": "2:00 PM ET", "guidance": "Wait for statement, enter after 2:30 PM ET"},
+    "2026-03-18": {"name": "FOMC Decision", "time": "2:00 PM ET", "guidance": "Wait for statement, enter after 2:30 PM ET"},
+    "2026-04-10": {"name": "CPI", "time": "8:30 AM ET", "guidance": "Wait for data, enter 9:30-10:00 AM CST"},
+    "2026-05-05": {"name": "FOMC Day 1", "time": "2:00 PM ET", "guidance": "Wait for statement, enter after 2:30 PM ET"},
+    "2026-05-06": {"name": "FOMC Decision", "time": "2:00 PM ET", "guidance": "Wait for statement, enter after 2:30 PM ET"},
+    "2026-06-16": {"name": "FOMC Day 1", "time": "2:00 PM ET", "guidance": "Wait for statement, enter after 2:30 PM ET"},
+    "2026-06-17": {"name": "FOMC Decision", "time": "2:00 PM ET", "guidance": "Wait for statement, enter after 2:30 PM ET"},
+    "2026-07-28": {"name": "FOMC Day 1", "time": "2:00 PM ET", "guidance": "Wait for statement, enter after 2:30 PM ET"},
+    "2026-07-29": {"name": "FOMC Decision", "time": "2:00 PM ET", "guidance": "Wait for statement, enter after 2:30 PM ET"},
+    "2026-09-15": {"name": "FOMC Day 1", "time": "2:00 PM ET", "guidance": "Wait for statement, enter after 2:30 PM ET"},
+    "2026-09-16": {"name": "FOMC Decision", "time": "2:00 PM ET", "guidance": "Wait for statement, enter after 2:30 PM ET"},
+    "2026-11-03": {"name": "FOMC Day 1", "time": "2:00 PM ET", "guidance": "Wait for statement, enter after 2:30 PM ET"},
+    "2026-11-04": {"name": "FOMC Decision", "time": "2:00 PM ET", "guidance": "Wait for statement, enter after 2:30 PM ET"},
+    "2026-12-15": {"name": "FOMC Day 1", "time": "2:00 PM ET", "guidance": "Wait for statement, enter after 2:30 PM ET"},
+    "2026-12-16": {"name": "FOMC Decision", "time": "2:00 PM ET", "guidance": "Wait for statement, enter after 2:30 PM ET"},
+}
+
 # ── Historical Tail Probabilities by VIX Regime ───────────
 # From 6,563-day backtest (2000-2026)
 TAIL_PROB = {
@@ -227,3 +250,76 @@ def edge_rating(market_price: float, hist_prob: float) -> str:
     elif ratio > 1.0:
         return "THIN"
     return "NEGATIVE"
+
+
+# ══════════════════════════════════════════════════════════════
+# OPTIONS TRADING CONSTANTS (TOS Naked Calls / Naked Puts)
+# For $5K-$15K TOS account, weekly/next-week expiration
+# ══════════════════════════════════════════════════════════════
+
+# ── Account & Risk Limits ────────────────────────────────────
+OPTIONS_MAX_RISK_PER_TRADE = 500   # Hard ceiling, any single trade
+OPTIONS_MIN_RISK_PER_TRADE = 200   # Minimum to make trade worthwhile
+
+# ── Position Sizing by VIX Regime ────────────────────────────
+OPTIONS_REGIME_SIZING = {
+    "LOW":     {"risk_frac": 1.00, "label": "Full size ($500 max)"},
+    "LOW_MED": {"risk_frac": 0.80, "label": "80% size ($400 max)"},
+    "MEDIUM":  {"risk_frac": 0.60, "label": "60% size ($300 max)"},
+    "HIGH":    {"risk_frac": 0.40, "label": "40% size ($200 min) — puts only with caution"},
+    "CRISIS":  {"risk_frac": 0.00, "label": "NO TRADES — all cash"},
+}
+
+# ── Exit Rules (Psychology Framework) ────────────────────────
+# These are non-negotiable. Every alert includes them.
+OPTIONS_EXIT_RULES = {
+    "profit_target_pct": 50,         # Close winner at 50% of premium received
+    "stop_loss_multiplier": 2.0,     # Close loser at 2x premium received
+    "time_exit_day": "Wednesday",    # Close weekly positions by Wed
+    "no_entry_after_cst": "14:30",   # No new entries after 2:30 PM CST
+    "no_hold_into_expiry": True,     # Never hold naked into expiration Friday
+}
+
+# ── Conviction Grades ────────────────────────────────────────
+# Grade determines what fraction of max regime-adjusted risk to use
+OPTIONS_GRADE_SIZING = {
+    "A+": {"size_frac": 1.00, "label": "Max conviction — full size"},
+    "A":  {"size_frac": 0.75, "label": "High conviction — 75% size"},
+    "B":  {"size_frac": 0.50, "label": "Medium conviction — 50% size"},
+    "C":  {"size_frac": 0.25, "label": "Low conviction — 25% or paper trade"},
+}
+
+# ── Expiry Preferences ──────────────────────────────────────
+OPTIONS_MIN_DTE = 5       # Minimum 5 DTE (no 0-2 DTE naked selling)
+OPTIONS_MAX_DTE = 12      # Max 12 DTE (next-week Friday)
+OPTIONS_PREFERRED_DTE = 7  # Sweet spot: ~1 week out
+
+# ── Strike Selection ────────────────────────────────────────
+OPTIONS_OTM_PCT = 0.03    # Default 3% out-of-the-money
+OPTIONS_STRIKE_INCREMENTS = {
+    "SPY":  1,      # $1 strikes
+    "QQQ":  1,
+    "SPX":  5,      # $5 strikes
+    "NVDA": 2.5,    # $2.50 strikes
+    "TSLA": 5,      # $5 strikes
+}
+
+# ── Ticker-specific IV estimates (for premium proxy) ────────
+# Used when we don't have real-time options chains
+OPTIONS_TYPICAL_IV = {
+    "SPY":  0.14,
+    "QQQ":  0.18,
+    "SPX":  0.14,
+    "NVDA": 0.45,
+    "TSLA": 0.55,
+}
+
+# ── Psychology Messages ──────────────────────────────────────
+# Embedded in every alert to enforce discipline
+PSYCH_HOLD_WINNER = "Let the trade work. Target is 50% profit. Do NOT close early."
+PSYCH_CUT_LOSER = "Cut NOW. Premium doubled against you. Capital preservation > being right."
+PSYCH_NO_REVENGE = "Do NOT re-enter after a loss. Wait for the next clean setup."
+PSYCH_SIZE_CHECK = "If this loss amount hurts, you are sized too big. Reduce."
+PSYCH_THETA_FRIEND = "Theta is your edge. Every day that passes without breach = money."
+PSYCH_CASH_IS_POSITION = "No setup today = no trade today. Cash IS a position."
+PSYCH_SYSTEM_TRUST = "Trust the system. The edge is in the process, not any single trade."

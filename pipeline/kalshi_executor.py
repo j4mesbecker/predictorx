@@ -32,7 +32,7 @@ logger = logging.getLogger(__name__)
 MAX_PER_TRADE = 20.0        # Max $ per single trade (user wants to start small)
 MAX_DAILY_DEPLOYED = 200.0  # Max total $ deployed per day across all trades
 MAX_TRADES_PER_DAY = 15     # Max number of orders per day
-BALANCE_FLOOR = 650.0       # Never let balance drop below this
+BALANCE_FLOOR = 500.0       # Never let balance drop below this
 MAX_DAILY_LOSS = 50.0       # Stop trading if daily realized loss exceeds this
 
 # ── State Tracking ──────────────────────────────────────────
@@ -91,25 +91,29 @@ def _get_kalshi_client():
     return client
 
 
-def get_balance() -> float:
-    """Get current Kalshi balance in dollars."""
+def get_balance() -> float | None:
+    """Get current Kalshi balance in dollars. Returns None on failure."""
     try:
         client = _get_kalshi_client()
-        api = client  # The KalshiClient wraps PortfolioApi methods
-        # Use the portfolio API
         from kalshi_python import PortfolioApi
-        portfolio = PortfolioApi(api)
+        portfolio = PortfolioApi(client)
         resp = portfolio.get_balance()
-        return resp.balance / 100.0 if hasattr(resp, 'balance') else 0.0
+        if hasattr(resp, 'balance') and resp.balance is not None:
+            return resp.balance / 100.0
     except Exception as e:
-        logger.error(f"Balance fetch error: {e}")
-        # Fallback to our raw API
-        try:
-            from pipeline.spx_bracket_scanner import _kalshi_get
-            data = _kalshi_get("/portfolio/balance")
-            return data.get("balance", 0) / 100.0
-        except Exception:
-            return 0.0
+        logger.warning(f"Balance fetch via SDK failed: {e}")
+
+    # Fallback to raw API
+    try:
+        from pipeline.spx_bracket_scanner import _kalshi_get
+        data = _kalshi_get("/portfolio/balance")
+        bal = data.get("balance")
+        if bal is not None:
+            return bal / 100.0
+    except Exception as e:
+        logger.error(f"Balance fetch via raw API also failed: {e}")
+
+    return None
 
 
 def _check_safety(ticker: str, cost: float, strategy: str) -> tuple[bool, str]:
@@ -140,12 +144,11 @@ def _check_safety(ticker: str, cost: float, strategy: str) -> tuple[bool, str]:
         return False, f"Daily loss limit ${MAX_DAILY_LOSS:.2f} hit — stopped"
 
     # 6. Balance floor
-    try:
-        balance = get_balance()
-        if balance - cost < BALANCE_FLOOR:
-            return False, f"Balance ${balance:.2f} - ${cost:.2f} would breach floor ${BALANCE_FLOOR:.2f}"
-    except Exception:
-        pass  # If we can't check balance, other limits still apply
+    balance = get_balance()
+    if balance is None:
+        return False, "Cannot verify balance — blocking trade for safety"
+    if balance - cost < BALANCE_FLOOR:
+        return False, f"Balance ${balance:.2f} - ${cost:.2f} would breach floor ${BALANCE_FLOOR:.2f}"
 
     return True, "OK"
 
@@ -237,30 +240,18 @@ def place_order(
             actual_status = "filled"
         elif order_status == "resting" or remaining_count > 0:
             actual_status = "resting"
-            # If order is resting (not filled), wait briefly then recheck
-            time.sleep(2)
-            try:
-                from pipeline.spx_bracket_scanner import _kalshi_get
-                order_check = _kalshi_get(f"/portfolio/orders/{order_id}")
-                o_data = order_check.get("order", order_check)
-                order_status = o_data.get("status", "unknown")
-                fill_count = o_data.get("fill_count", 0) or 0
-                remaining_count = o_data.get("remaining_count", 0) or 0
-                if order_status == "executed":
-                    actual_status = "filled"
-                elif order_status == "canceled":
-                    actual_status = "canceled"
-            except Exception:
-                pass
+            logger.info(f"Order {ticker} is resting — will settle via normal settlement cycle")
         elif order_status == "canceled":
             actual_status = "canceled"
         else:
             actual_status = order_status
 
-        # Update tracking
-        _executed_tickers.add(ticker)
+        # Update tracking — only block ticker if order actually filled
         if actual_status == "filled":
+            _executed_tickers.add(ticker)
             _deployed_today += cost
+        elif actual_status == "resting":
+            _executed_tickers.add(ticker)  # Block while resting to avoid duplicates
 
         trade_record = {
             "timestamp": datetime.now().isoformat(),
@@ -374,6 +365,21 @@ async def send_trade_notification(result: dict, strategy: str, extra: str = ""):
         ]
 
     await bot.send_message("\n".join(lines))
+
+
+def record_realized_loss(loss_amount: float):
+    """Record a realized loss from settlement. Called by tasks.settle_predictions."""
+    global _realized_loss_today
+    _reset_if_new_day()
+    if loss_amount > 0:
+        _realized_loss_today += loss_amount
+        logger.info(f"Realized loss: ${loss_amount:.2f} — daily total: ${_realized_loss_today:.2f}/{MAX_DAILY_LOSS:.2f}")
+
+
+def get_deployed_today() -> float:
+    """Get total $ deployed today (filled trades only)."""
+    _reset_if_new_day()
+    return _deployed_today
 
 
 def get_daily_summary() -> dict:

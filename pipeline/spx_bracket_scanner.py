@@ -34,6 +34,10 @@ logger = logging.getLogger(__name__)
 API_BASE = "https://api.elections.kalshi.com"
 API_PREFIX = "/trade-api/v2"
 
+# ── Bracket Risk Limits ─────────────────────────────────────
+BRACKET_MAX_PER_TRADE = 10.0   # $10 max risk per bracket trade
+BRACKET_DAILY_BUDGET = 20.0    # $20 max total bracket risk per day
+
 # ── State Tracking ──────────────────────────────────────────
 _last_scan_date: date | None = None
 _scans_today: int = 0
@@ -232,12 +236,12 @@ def _filter_sweet_spot(markets: list[dict], spx_price: float) -> list[dict]:
         yes_price = m["yes_ask"] if m["yes_ask"] > 0 else m["yes_bid"]
         if yes_price <= 0:
             continue
-        if not (5 <= yes_price <= 49):
+        if not (10 <= yes_price <= 49):
             continue
 
         # Distance from current SPX
         distance = abs(spx_price - m["bracket_mid"])
-        if distance < 30:
+        if distance < 50:
             continue  # Too close — SPX could easily reach this bracket
 
         # Get edge signal
@@ -343,12 +347,16 @@ async def scan_spx_brackets(force: bool = False):
         _alerted_tickers.add(m["ticker"])
 
     # ── Get balance for sizing ──────────────────────────────
-    balance = 827.0  # Default estimate
+    balance = None
     try:
         data = _kalshi_get("/portfolio/balance")
-        balance = data.get("balance", 82700) / 100.0  # Kalshi returns cents
-    except Exception:
-        pass
+        balance = data.get("balance", 0) / 100.0  # Kalshi returns cents
+    except Exception as e:
+        logger.error(f"Balance fetch failed: {e}")
+
+    if not balance or balance <= 0:
+        logger.error("Cannot fetch balance — aborting bracket scan (no stale fallback)")
+        return
 
     # ── Build trade recommendations ──────────────────────────
     from core.strategies.spx_edge_map import get_spx_trade_recommendation
@@ -360,7 +368,7 @@ async def scan_spx_brackets(force: bool = False):
             balance=balance,
             event_type=m.get("event_type", "daily"),
             distance_from_spx=m["distance"],
-            max_per_trade=20.0,
+            max_per_trade=BRACKET_MAX_PER_TRADE,
         )
         rec["ticker"] = m["ticker"]
         rec["title"] = m["title"]
@@ -375,6 +383,7 @@ async def scan_spx_brackets(force: bool = False):
 
     # Fetch live orderbook prices for each ticker so we show real costs
     approval_trades = []
+    batch_cost_so_far = 0.0  # Track cost within this batch (not yet deployed)
     for t in trades:
         if t.get("action") == "SKIP":
             continue
@@ -414,10 +423,28 @@ async def scan_spx_brackets(force: bool = False):
 
         # Recalculate contracts based on live price
         if price_cents > 0:
-            max_cost = min(20.0, t.get("cost", 20.0))
+            max_cost = min(BRACKET_MAX_PER_TRADE, t.get("cost", BRACKET_MAX_PER_TRADE))
             contracts = int((max_cost * 100) / price_cents)
             if contracts <= 0:
                 continue
+
+        # Enforce daily bracket budget using executor's actual deployed amount
+        trade_cost = (contracts * price_cents) / 100.0
+        from pipeline.kalshi_executor import get_deployed_today
+        deployed = get_deployed_today()
+        remaining_budget = BRACKET_DAILY_BUDGET - deployed - batch_cost_so_far
+        if remaining_budget <= 0:
+            logger.info(f"Daily bracket budget ${BRACKET_DAILY_BUDGET:.0f} exhausted (deployed ${deployed:.2f}), skipping {ticker}")
+            break
+        if trade_cost > remaining_budget:
+            # Reduce contracts to fit remaining budget
+            contracts = int((remaining_budget * 100) / price_cents)
+            if contracts <= 0:
+                logger.info(f"Not enough budget for {ticker}, skipping")
+                continue
+            trade_cost = (contracts * price_cents) / 100.0
+
+        batch_cost_so_far += trade_cost
 
         approval_trades.append({
             "ticker": ticker,
@@ -441,6 +468,7 @@ async def scan_spx_brackets(force: bool = False):
                 "vix": vix_price,
                 "live_no_ask": no_ask,
                 "live_yes_ask": yes_ask,
+                "close_time": mkt.get("close_time", ""),
             },
         })
 

@@ -41,6 +41,7 @@ SPY_LEVELS = {
         "direction": "below",
         "action": "DEMAND ZONE — 30-day low being tested. Buyers expected here.",
         "trade": "BUY SPY calls 14+ DTE at current strike. Wait for CPI/catalyst to clear.",
+        "options_zone": "demand",
     },
     "SPY_SMA50_687": {
         "price": 687.0,
@@ -55,6 +56,7 @@ SPY_LEVELS = {
         "direction": "above",
         "action": "ATH TEST — $698 is the ceiling. Watch for rejection or breakout.",
         "trade": "If breakout: BUY SPY 710C 30+ DTE. If rejection: wait for retest.",
+        "options_zone": "supply",
     },
     "SPY_BREAKOUT_700": {
         "price": 700.0,
@@ -88,6 +90,7 @@ QQQ_LEVELS = {
         "direction": "below",
         "action": "DEMAND ZONE — 30-day low. Tech buyers step in here historically.",
         "trade": "BUY QQQ calls ATM 14+ DTE if VIX < 25. Higher beta than SPY.",
+        "options_zone": "demand",
     },
     "QQQ_SMA50_619": {
         "price": 619.0,
@@ -102,6 +105,7 @@ QQQ_LEVELS = {
         "direction": "above",
         "action": "ATH BREAKOUT — All-time high cleared. Blue sky.",
         "trade": "BUY QQQ 650C 30+ DTE. Momentum trade into breakout.",
+        "options_zone": "supply",
     },
     "QQQ_TARGET_650": {
         "price": 650.0,
@@ -128,6 +132,7 @@ TSLA_LEVELS = {
         "direction": "below",
         "action": "30-DAY LOW — Recent floor being tested. Bounce zone.",
         "trade": "BUY TSLA calls 30+ DTE at current strike if VIX < 25.",
+        "options_zone": "demand",
     },
     "TSLA_BREAKOUT_441": {
         "price": 441.0,
@@ -135,6 +140,7 @@ TSLA_LEVELS = {
         "direction": "above",
         "action": "BREAKOUT — 4-month consolidation resolved upward.",
         "trade": "BUY TSLA 3/20 500C. Target $500 on momentum.",
+        "options_zone": "supply",
     },
     "TSLA_TARGET_500": {
         "price": 500.0,
@@ -175,6 +181,7 @@ NVDA_LEVELS = {
         "direction": "below",
         "action": "DEMAND ZONE — Strong buyer support from Oct-Nov base.",
         "trade": "BUY NVDA calls 45+ DTE. High conviction long entry.",
+        "options_zone": "demand",
     },
     "NVDA_DEMAND_171": {
         "price": 171.0,
@@ -189,6 +196,7 @@ NVDA_LEVELS = {
         "direction": "above",
         "action": "SUPPLY ZONE — 30-day high. Sellers expected here.",
         "trade": "Take profits on swing calls. Watch for rejection or breakout.",
+        "options_zone": "supply",
     },
     "NVDA_BREAKOUT_200": {
         "price": 200.0,
@@ -366,6 +374,43 @@ async def check_stock_levels():
                     "session_low": session["low"],
                     "all_levels": levels,
                 }
+
+                # ── Options signal for demand/supply zones ────────
+                options_zone = level.get("options_zone")
+                if options_zone:
+                    try:
+                        from adapters.kalshi_data import get_vix
+                        vix_data = get_vix()
+                        vix_price = vix_data.get("price", 18)
+                        regime = vix_data.get("regime", "MEDIUM")
+                    except Exception:
+                        vix_price, regime = 18.0, "MEDIUM"
+
+                    try:
+                        from core.strategies.options_strategy import (
+                            compute_naked_put_signal,
+                            compute_naked_call_signal,
+                        )
+                        if options_zone == "demand":
+                            alert["options_signal"] = compute_naked_put_signal(
+                                ticker=ticker,
+                                current_price=price,
+                                vix_price=vix_price,
+                                regime=regime,
+                                trigger_type="demand_zone",
+                                drop_pct=abs(change_pct) if change_pct < 0 else 0,
+                            )
+                        elif options_zone == "supply":
+                            alert["options_signal"] = compute_naked_call_signal(
+                                ticker=ticker,
+                                current_price=price,
+                                vix_price=vix_price,
+                                regime=regime,
+                                trigger_type="supply_zone",
+                            )
+                    except Exception as e:
+                        logger.debug(f"Options signal error for {level_id}: {e}")
+
                 await _send_stock_alert(alert)
                 logger.warning(
                     f"{ticker} LEVEL: {level['label']} ${target:.0f} — "
@@ -397,6 +442,43 @@ async def check_stock_levels():
                     "change_pct": change_pct,
                     "distance_pct": distance_pct,
                 }
+
+                # ── Options signal preview on proximity ───────────
+                options_zone = level.get("options_zone")
+                if options_zone:
+                    try:
+                        from adapters.kalshi_data import get_vix
+                        vix_data = get_vix()
+                        vix_price = vix_data.get("price", 18)
+                        regime = vix_data.get("regime", "MEDIUM")
+                    except Exception:
+                        vix_price, regime = 18.0, "MEDIUM"
+
+                    try:
+                        from core.strategies.options_strategy import (
+                            compute_naked_put_signal,
+                            compute_naked_call_signal,
+                        )
+                        if options_zone == "demand":
+                            alert["options_signal"] = compute_naked_put_signal(
+                                ticker=ticker,
+                                current_price=price,
+                                vix_price=vix_price,
+                                regime=regime,
+                                trigger_type="demand_zone",
+                                drop_pct=abs(change_pct) if change_pct < 0 else 0,
+                            )
+                        elif options_zone == "supply":
+                            alert["options_signal"] = compute_naked_call_signal(
+                                ticker=ticker,
+                                current_price=price,
+                                vix_price=vix_price,
+                                regime=regime,
+                                trigger_type="supply_zone",
+                            )
+                    except Exception as e:
+                        logger.debug(f"Options signal error for {level_id}: {e}")
+
                 await _send_stock_alert(alert)
                 logger.info(
                     f"{ticker} PROXIMITY: {distance_pct:.1f}% from "

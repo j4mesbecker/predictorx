@@ -18,6 +18,8 @@ from telegram.formatters import TOS, KAL
 from config.constants import (
     BLACKOUT_DATES, MONTHLY_RISK_FACTOR, DOW_DROP2_RATE,
     SAFE_MONTHS, RISKY_MONTHS,
+    PSYCH_HOLD_WINNER, PSYCH_CUT_LOSER, PSYCH_NO_REVENGE,
+    PSYCH_SIZE_CHECK, PSYCH_SYSTEM_TRUST,
 )
 
 logger = logging.getLogger(__name__)
@@ -29,8 +31,14 @@ _open_positions: list[dict] = []
 
 def track_position(ticker: str, strike: str, entry_price: float,
                    spy_at_entry: float, target_pct: float = 50.0,
-                   stop_pct: float = -50.0):
-    """Track a suggested position for exit monitoring."""
+                   stop_pct: float = -50.0, position_type: str = "long_call",
+                   entry_premium: float = 0.0):
+    """
+    Track a suggested position for exit monitoring.
+
+    position_type: "long_call", "naked_put", "naked_call"
+    entry_premium: for naked options, the credit received (for exit calculations)
+    """
     _open_positions.append({
         "ticker": ticker,
         "strike": strike,
@@ -39,6 +47,9 @@ def track_position(ticker: str, strike: str, entry_price: float,
         "target_pct": target_pct,
         "stop_pct": stop_pct,
         "opened": datetime.now(),
+        "position_type": position_type,
+        "entry_premium": entry_premium,
+        "entry_day_of_week": datetime.now().strftime("%A"),
     })
 
 
@@ -180,10 +191,126 @@ async def check_exit_signals():
 
     positions_to_remove = []
 
+    now = datetime.now()
+    day_of_week = now.strftime("%A")
+
     for i, pos in enumerate(_open_positions):
         spy_entry = pos["spy_at_entry"]
         spy_move_pct = ((spy_price - spy_entry) / spy_entry) * 100
+        position_type = pos.get("position_type", "long_call")
 
+        # ── Naked Put / Naked Call exit logic ──────────────────
+        if position_type in ("naked_put", "naked_call"):
+            days_held = (now - pos["opened"]).days
+            entry_premium = pos.get("entry_premium", 0)
+
+            # Time exit: Wednesday for positions entered Mon/Tue (weekly theta)
+            if day_of_week == "Wednesday" and days_held >= 1:
+                lines = [
+                    f"{TOS} <b>TIME EXIT — CLOSE {position_type.upper().replace('_', ' ')}</b>",
+                    "",
+                    f"Position: {pos['ticker']} {pos['strike']}",
+                    f"Entered: {pos['opened'].strftime('%b %d %I:%M %p')} CST ({days_held}d ago)",
+                    "",
+                    "Wednesday time exit rule. Buy to close now.",
+                    "Don't hold weeklies into Thursday/Friday theta crush.",
+                    "",
+                    f"<i>{PSYCH_SYSTEM_TRUST}</i>",
+                ]
+                await bot.send_message("\n".join(lines))
+                positions_to_remove.append(i)
+                continue
+
+            if position_type == "naked_put":
+                # Take profit proxy: SPY rallied enough that put premium likely at 50% target
+                # SPY up +0.8% from entry = put premium roughly halved
+                if spy_move_pct >= 0.8:
+                    lines = [
+                        f"{TOS} <b>TAKE PROFIT — NAKED PUT</b>",
+                        "",
+                        f"SPY rallied +{spy_move_pct:.1f}% from entry ({spy_entry:.0f} \u2192 {spy_price:.0f})",
+                        f"Position: {pos['ticker']} {pos['strike']}",
+                        f"Entry premium: ~${entry_premium:.2f}" if entry_premium else "",
+                        "",
+                        "Put premium likely at or below 50% target. Buy to close.",
+                        f"<i>{PSYCH_HOLD_WINNER}</i>" if spy_move_pct < 1.2 else "Take profit NOW.",
+                    ]
+                    await bot.send_message("\n".join([l for l in lines if l]))
+                    positions_to_remove.append(i)
+
+                # Cut loss proxy: SPY dropped -1.5% from entry = put premium likely doubled
+                elif spy_move_pct <= -1.5:
+                    lines = [
+                        f"{TOS} <b>CUT LOSS — NAKED PUT</b>",
+                        "",
+                        f"SPY dropped {spy_move_pct:.1f}% from entry ({spy_entry:.0f} \u2192 {spy_price:.0f})",
+                        f"Position: {pos['ticker']} {pos['strike']}",
+                        "",
+                        "Put premium likely doubled (2x stop). Buy to close NOW.",
+                        f"<i>{PSYCH_CUT_LOSER}</i>",
+                        "",
+                        f"<i>{PSYCH_NO_REVENGE}</i>",
+                    ]
+                    await bot.send_message("\n".join(lines))
+                    positions_to_remove.append(i)
+
+                # Warning: SPY down >0.8% = put getting expensive
+                elif spy_move_pct <= -0.8 and not pos.get("warned"):
+                    lines = [
+                        f"{TOS} <b>NAKED PUT WARNING</b>",
+                        "",
+                        f"SPY down {spy_move_pct:.1f}% — put premium rising",
+                        f"Position: {pos['ticker']} {pos['strike']}",
+                        "",
+                        "Buy to close if SPY drops to -1.5% from entry.",
+                        f"<i>{PSYCH_SIZE_CHECK}</i>",
+                    ]
+                    await bot.send_message("\n".join(lines))
+                    pos["warned"] = True
+
+            elif position_type == "naked_call":
+                # Take profit proxy: SPY dropped = call premium decaying
+                if spy_move_pct <= -0.8:
+                    lines = [
+                        f"{TOS} <b>TAKE PROFIT — NAKED CALL</b>",
+                        "",
+                        f"SPY dropped {spy_move_pct:.1f}% from entry ({spy_entry:.0f} \u2192 {spy_price:.0f})",
+                        f"Position: {pos['ticker']} {pos['strike']}",
+                        "",
+                        "Call premium likely at 50% target. Buy to close.",
+                    ]
+                    await bot.send_message("\n".join(lines))
+                    positions_to_remove.append(i)
+
+                # Cut loss proxy: SPY rallied +1.5% = call premium doubled
+                elif spy_move_pct >= 1.5:
+                    lines = [
+                        f"{TOS} <b>CUT LOSS — NAKED CALL</b>",
+                        "",
+                        f"SPY rallied +{spy_move_pct:.1f}% from entry ({spy_entry:.0f} \u2192 {spy_price:.0f})",
+                        f"Position: {pos['ticker']} {pos['strike']}",
+                        "",
+                        "Call premium likely doubled (2x stop). Buy to close NOW.",
+                        f"<i>{PSYCH_CUT_LOSER}</i>",
+                    ]
+                    await bot.send_message("\n".join(lines))
+                    positions_to_remove.append(i)
+
+                elif spy_move_pct >= 0.8 and not pos.get("warned"):
+                    lines = [
+                        f"{TOS} <b>NAKED CALL WARNING</b>",
+                        "",
+                        f"SPY up +{spy_move_pct:.1f}% — call premium rising",
+                        f"Position: {pos['ticker']} {pos['strike']}",
+                        "",
+                        "Buy to close if SPY rallies to +1.5% from entry.",
+                    ]
+                    await bot.send_message("\n".join(lines))
+                    pos["warned"] = True
+
+            continue  # Skip the long_call logic below
+
+        # ── Long call exit logic (existing) ────────────────────
         # Take profit: SPY recovered +1.5% from entry (calls ~double)
         if spy_move_pct >= 1.5:
             lines = [

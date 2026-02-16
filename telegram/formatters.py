@@ -238,6 +238,14 @@ def format_spx_drop_alert(alert: dict) -> str:
         lines.append(f"Entry window: 8:30-9:30 AM CST (options open, let IV settle)")
         lines.append(f"NO WEEKLIES — multi-day selloffs kill them")
 
+        # Append naked put signal if available
+        naked_put = d.get("naked_put")
+        if naked_put and not naked_put.get("blocked"):
+            lines.append("")
+            lines.append("\u2500" * 30)
+            lines.append("")
+            lines.append(format_naked_put_signal(naked_put))
+
         return "\n".join(lines)
 
     # ── TAIL TRADE mode (-2%, -3%, -5%) ──────────────────────
@@ -290,6 +298,14 @@ def format_spx_drop_alert(alert: dict) -> str:
             margin = f" | ~${t['margin']} margin" if t.get("margin") else ""
             lines.append(f"{TOS} {t['action']} {t['instrument']}{margin}")
 
+    # Append naked put signal if available
+    naked_put = d.get("naked_put")
+    if naked_put and not naked_put.get("blocked"):
+        lines.append("")
+        lines.append("\u2500" * 30)
+        lines.append("")
+        lines.append(format_naked_put_signal(naked_put))
+
     return "\n".join(lines)
 
 
@@ -319,6 +335,18 @@ def format_stock_level_alert(alert: dict) -> str:
         lines.append("")
         lines.append(f"<b>Trade plan:</b> {d['trade']}")
         lines.append("")
+
+        # Append options signal if available
+        opt_sig = d.get("options_signal")
+        if opt_sig and not opt_sig.get("blocked"):
+            lines.append("\u2500" * 30)
+            lines.append("")
+            if opt_sig.get("action") == "SELL_PUT":
+                lines.append(format_naked_put_signal(opt_sig))
+            elif opt_sig.get("action") == "SELL_CALL":
+                lines.append(format_naked_call_signal(opt_sig))
+            lines.append("")
+
         lines.append(f"Options window: 8:30 AM - 3:30 PM CST")
         return "\n".join(lines)
 
@@ -349,6 +377,17 @@ def format_stock_level_alert(alert: dict) -> str:
             lines.append(
                 f"  ${lvl['price']:<8.0f} {lvl['label']}{hit}{marker}"
             )
+        lines.append("")
+
+    # Append options signal if available (level hit)
+    opt_sig = d.get("options_signal")
+    if opt_sig and not opt_sig.get("blocked"):
+        lines.append("\u2500" * 30)
+        lines.append("")
+        if opt_sig.get("action") == "SELL_PUT":
+            lines.append(format_naked_put_signal(opt_sig))
+        elif opt_sig.get("action") == "SELL_CALL":
+            lines.append(format_naked_call_signal(opt_sig))
         lines.append("")
 
     lines.append("Options window: 8:30 AM - 3:30 PM CST")
@@ -404,6 +443,134 @@ def format_vix_reversion_alert(alert: dict) -> str:
     lines.append("")
     lines.append("This is the regime-shift entry. Size up.")
     lines.append("Entry: NOW if 8:30 AM-3:30 PM CST, otherwise at open tomorrow.")
+
+    # Append naked put signal — this is the A+ conviction entry
+    naked_put = d.get("naked_put")
+    if naked_put and not naked_put.get("blocked"):
+        lines.append("")
+        lines.append("\u2500" * 30)
+        lines.append("")
+        lines.append(format_naked_put_signal(naked_put))
+
+    return "\n".join(lines)
+
+
+def format_tos_daily_intel(intel: dict) -> str:
+    """
+    Daily TOS intelligence report — morning pre-market brief for ThinkOrSwim.
+    Read-only intel, no APPROVE/SKIP buttons.
+    Keeps under 4096 chars (Telegram limit).
+    """
+    d = intel
+    lines = []
+
+    # ── Header ────────────────────────────────────────────────
+    day_str = d.get("date_str", "")
+    lines.append(f"{TOS} <b>TOS DAILY INTEL</b> | {day_str}")
+    lines.append("")
+
+    # ── Market snapshot ───────────────────────────────────────
+    spx = d.get("spx_price", 0)
+    vix = d.get("vix_price", 0)
+    regime = d.get("regime", "?")
+    futures_chg = d.get("futures_change_pct")
+    snap = f"SPX {spx:,.0f} | VIX {vix:.1f} ({regime})"
+    if futures_chg is not None:
+        snap += f" | Futures {futures_chg:+.1f}%"
+    lines.append(snap)
+
+    # Expected weekly move from VIX
+    weekly_move = d.get("expected_weekly_move")
+    if weekly_move:
+        lines.append(f"Expected weekly move: +/- {weekly_move:.0f} pts")
+    lines.append("")
+
+    # ── Support / Resistance from bracket data ────────────────
+    levels = d.get("bracket_levels", [])
+    if levels:
+        lines.append("<b>SUPPORT / RESISTANCE (from brackets):</b>")
+        for lvl in levels:
+            label = lvl.get("label", "")
+            price = lvl.get("price", 0)
+            wr = lvl.get("win_rate")
+            detail = f"  {price:,.0f}  {label}"
+            if wr:
+                detail += f" ({wr:.1%} NO WR)"
+            lines.append(detail)
+        lines.append("")
+
+    # ── External trader intel ─────────────────────────────────
+    ext = d.get("external_intel")
+    if ext:
+        source = ext.get("source", "Trader")
+        lines.append(f"\U0001f4ca <b>TRADER INTEL ({source}):</b>")
+        for lvl in ext.get("levels", [])[:8]:
+            ticker = lvl.get("ticker", "")
+            price = lvl.get("price", 0)
+            note = lvl.get("note", "")
+            lines.append(f"  {ticker}: {price:,.0f} — {note}")
+        psych = ext.get("psychology")
+        if psych:
+            lines.append(f"  \u26a0\ufe0f {psych}")
+        lines.append("")
+
+    # ── Dip buy calls ─────────────────────────────────────────
+    dip_level = d.get("dip_level")
+    call_options = d.get("call_options", [])
+    bounce_rate = d.get("bounce_rate")
+    if call_options:
+        dip_str = f" (to ~{dip_level:,.0f})" if dip_level else ""
+        lines.append(f"<b>IF SPX DIPS -1.0%{dip_str}:</b>")
+        for c in call_options:
+            lines.append(f"  {TOS} Buy {c['ticker']} {c['strike']} ({c['label']})")
+            if c.get("note"):
+                lines.append(f"     {c['note']}")
+        if bounce_rate:
+            lines.append(f"  {bounce_rate:.0f}% bounce rate in {regime} regime")
+        lines.append("")
+
+    # ── Put credit spreads ────────────────────────────────────
+    spreads = d.get("put_credit_spreads", [])
+    if spreads:
+        lines.append("<b>PUT CREDIT SPREADS (premium selling):</b>")
+        for s in spreads:
+            if s["instrument"] == "SPY":
+                lines.append(f"  {TOS} {s['action']} (weekly) | ${s.get('risk', 0)} max risk")
+            elif s.get("margin"):
+                lines.append(f"  {TOS} {s['action']} {s['instrument']} | ~${s['margin']} margin")
+            else:
+                lines.append(f"  {TOS} {s['action']} {s['instrument']}")
+        lines.append("")
+
+    # ── Options playbook ────────────────────────────────────────
+    options_intel = d.get("options_intel")
+    if options_intel:
+        playbook = format_options_daily_intel(options_intel)
+        if playbook:
+            lines.append(playbook)
+            lines.append("")
+
+    # ── Catalyst calendar ─────────────────────────────────────
+    catalyst = d.get("catalyst")
+    if catalyst:
+        lines.append(f"<b>CATALYST TODAY:</b> {catalyst['name']} {catalyst.get('time', '')}")
+        if catalyst.get("guidance"):
+            lines.append(f"  {catalyst['guidance']}")
+        lines.append("")
+
+    # ── VIX reversion status ──────────────────────────────────
+    vix_note = d.get("vix_note")
+    if vix_note:
+        lines.append(f"{TOS} {vix_note}")
+        lines.append("")
+
+    # ── Blocked warning ───────────────────────────────────────
+    if d.get("blocked"):
+        for reason in d.get("block_reasons", []):
+            lines.append(f"\u274c {reason}")
+        lines.append("")
+
+    lines.append("<i>Read-only intel — place trades on TOS yourself</i>")
 
     return "\n".join(lines)
 
@@ -524,5 +691,194 @@ def format_spx_bracket_alert(alert: dict) -> str:
         lines.append("")
         lines.append("Place orders on Kalshi. BUY NO on each bracket.")
     lines.append(f"Scan time: {d.get('scan_time', 'now')}")
+
+    return "\n".join(lines)
+
+
+# ── Options Signal Formatters (Naked Puts / Naked Calls) ──────
+
+
+def format_naked_put_signal(signal: dict) -> str:
+    """
+    Format a naked put signal for Telegram.
+    Includes: grade badge, trade details, WHY, EXIT PLAN, MAX RISK, psychology.
+    """
+    if not signal or signal.get("blocked"):
+        reasons = signal.get("block_reasons", []) if signal else []
+        if reasons:
+            return "\n".join(["\u274c NAKED PUT BLOCKED"] + reasons)
+        return ""
+
+    s = signal
+    grade = s.get("conviction_grade", "?")
+    lines = []
+
+    lines.append(
+        f"{TOS} <b>SELL {s['ticker']} {s['strike']:.0f}P [{grade}]</b>"
+    )
+    lines.append(
+        f"   {s.get('expiry_label', '?')} exp"
+        f" | ~${s.get('premium_estimate', 0):.2f} premium"
+        f" | {s.get('contracts', 1)}x"
+    )
+    lines.append("")
+
+    # WHY NOW
+    reason = s.get("entry_reason", "")
+    if reason:
+        lines.append(f"<b>WHY:</b> {reason}")
+        lines.append("")
+
+    # EXIT PLAN
+    profit = s.get("profit_target", 0)
+    stop = s.get("stop_loss", 0)
+    lines.append("<b>EXIT PLAN:</b>")
+    lines.append(f"  \u2705 Buy back at ~${profit:.2f} (50% profit)")
+    lines.append(f"  \u274c Cut at ~${stop:.2f} (2x premium stop)")
+    lines.append(f"  \u23f0 Close by Wednesday if weekly")
+    lines.append("")
+
+    # MAX RISK
+    max_risk = s.get("max_risk", 0)
+    size_label = s.get("size_label", "")
+    lines.append(
+        f"<b>MAX RISK:</b> ${max_risk:.0f}"
+        f"  |  {size_label}"
+    )
+    lines.append("")
+
+    # Psychology
+    psych = s.get("psychology_note", "")
+    if psych:
+        lines.append(f"<i>{psych}</i>")
+
+    return "\n".join(lines)
+
+
+def format_naked_call_signal(signal: dict) -> str:
+    """
+    Format a naked call signal for Telegram.
+    Mirror of put signal but bearish direction.
+    """
+    if not signal or signal.get("blocked"):
+        reasons = signal.get("block_reasons", []) if signal else []
+        if reasons:
+            return "\n".join(["\u274c NAKED CALL BLOCKED"] + reasons)
+        return ""
+
+    s = signal
+    grade = s.get("conviction_grade", "?")
+    lines = []
+
+    lines.append(
+        f"{TOS} <b>SELL {s['ticker']} {s['strike']:.0f}C [{grade}]</b>"
+    )
+    lines.append(
+        f"   {s.get('expiry_label', '?')} exp"
+        f" | ~${s.get('premium_estimate', 0):.2f} premium"
+        f" | {s.get('contracts', 1)}x"
+    )
+    lines.append("")
+
+    # WHY NOW
+    reason = s.get("entry_reason", "")
+    if reason:
+        lines.append(f"<b>WHY:</b> {reason}")
+        lines.append("")
+
+    # EXIT PLAN
+    profit = s.get("profit_target", 0)
+    stop = s.get("stop_loss", 0)
+    lines.append("<b>EXIT PLAN:</b>")
+    lines.append(f"  \u2705 Buy back at ~${profit:.2f} (50% profit)")
+    lines.append(f"  \u274c Cut at ~${stop:.2f} (2x premium stop)")
+    lines.append(f"  \u23f0 Close by Wednesday if weekly")
+    lines.append("")
+
+    # MAX RISK
+    max_risk = s.get("max_risk", 0)
+    size_label = s.get("size_label", "")
+    lines.append(
+        f"<b>MAX RISK:</b> ${max_risk:.0f}"
+        f"  |  {size_label}"
+    )
+    lines.append("")
+
+    # Psychology
+    psych = s.get("psychology_note", "")
+    if psych:
+        lines.append(f"<i>{psych}</i>")
+
+    return "\n".join(lines)
+
+
+def format_options_daily_intel(options_intel: dict) -> str:
+    """
+    Format OPTIONS PLAYBOOK section for the morning report.
+    Shows: regime guidance, risk budget, put ideas, call ideas, rules reminder.
+    """
+    if not options_intel:
+        return ""
+
+    o = options_intel
+    lines = []
+
+    lines.append(f"{TOS} <b>OPTIONS PLAYBOOK</b>")
+    lines.append("")
+
+    # Regime guidance
+    guidance = o.get("regime_guidance", "")
+    if guidance:
+        lines.append(guidance)
+        lines.append("")
+
+    # Risk budget
+    budget = o.get("risk_budget", 0)
+    if budget:
+        per_trade = min(budget, 500)
+        max_positions = max(1, int(budget / per_trade)) if per_trade else 1
+        lines.append(
+            f"<b>Risk budget:</b> ${budget:.0f} total today"
+            f" | ${per_trade:.0f}/trade"
+            f" | Max {max_positions} positions"
+        )
+        lines.append("")
+
+    # Naked put ideas
+    put_ideas = o.get("naked_put_ideas", [])
+    if put_ideas:
+        lines.append("<b>SELL PUTS (bullish):</b>")
+        for idea in put_ideas[:3]:
+            ticker = idea.get("ticker", "?")
+            strike = idea.get("strike", 0)
+            prem = idea.get("premium_estimate", 0)
+            grade = idea.get("conviction_grade", "?")
+            condition = idea.get("condition", "")
+            lines.append(
+                f"  {ticker} {strike:.0f}P [{grade}] ~${prem:.2f}"
+            )
+            if condition:
+                lines.append(f"    IF: {condition}")
+        lines.append("")
+
+    # Naked call ideas
+    call_ideas = o.get("naked_call_ideas", [])
+    if call_ideas:
+        lines.append("<b>SELL CALLS (bearish):</b>")
+        for idea in call_ideas[:3]:
+            ticker = idea.get("ticker", "?")
+            strike = idea.get("strike", 0)
+            prem = idea.get("premium_estimate", 0)
+            grade = idea.get("conviction_grade", "?")
+            condition = idea.get("condition", "")
+            lines.append(
+                f"  {ticker} {strike:.0f}C [{grade}] ~${prem:.2f}"
+            )
+            if condition:
+                lines.append(f"    IF: {condition}")
+        lines.append("")
+
+    # Rules reminder
+    lines.append("<i>50% profit target | 2x stop | Close Wed if weekly | No entries after 2:30 PM CST</i>")
 
     return "\n".join(lines)

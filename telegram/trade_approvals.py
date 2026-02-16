@@ -13,7 +13,7 @@ Flow:
 
 import logging
 import time
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 from typing import Optional
 
 logger = logging.getLogger(__name__)
@@ -29,6 +29,19 @@ TRADE_EXPIRY_SECONDS = 30 * 60
 def _generate_trade_id() -> str:
     """Generate a short unique trade ID."""
     return f"t{int(time.time() * 1000) % 1_000_000_000}"
+
+
+def _format_settlement_time(close_time: str) -> str:
+    """Format ISO close_time to human-readable CST time."""
+    if not close_time:
+        return ""
+    try:
+        dt = datetime.fromisoformat(close_time.replace("Z", "+00:00"))
+        # Convert to CST (UTC-6)
+        cst = dt.astimezone(timezone(timedelta(hours=-6)))
+        return cst.strftime("%b %d %-I:%M %p CST")
+    except (ValueError, AttributeError):
+        return close_time[:16] if close_time else ""
 
 
 def _cleanup_expired():
@@ -80,19 +93,32 @@ async def send_trade_for_approval(
     }
 
     # Build alert message
+    meta = metadata or {}
+    win_rate = meta.get("win_rate", 0)
+    grade = meta.get("grade", "")
+    close_time = meta.get("close_time", "")
+    settle_str = _format_settlement_time(close_time)
+
     lines = [
         f"\U0001f534 <b>TRADE OPPORTUNITY</b> [{strategy.upper()}]",
         "",
         f"<code>{ticker}</code>",
         f"BUY {side.upper()} {contracts}x @ {price_cents}c",
-        f"Cost: <b>${cost:.2f}</b>",
-        f"Payout if right: <b>${contracts:.2f}</b> (+${profit:.2f})",
-        f"ROI: <b>{roi:.1f}%</b>",
         "",
-        description,
-        "",
-        f"\u23f0 Expires in 30 min",
+        f"Risk: <b>${cost:.2f}</b>",
+        f"Reward: <b>+${profit:.2f}</b> ({roi:.1f}% ROI)",
     ]
+    if win_rate:
+        prob_line = f"Win probability: <b>{win_rate:.1%}</b>"
+        if grade:
+            prob_line += f"  |  Grade: <b>{grade}</b>"
+        lines.append(prob_line)
+    if settle_str:
+        lines.append(f"Settles: <b>{settle_str}</b>")
+    lines.append("")
+    lines.append(description)
+    lines.append("")
+    lines.append(f"\u23f0 Expires in 30 min")
     text = "\n".join(lines)
 
     # Inline keyboard with APPROVE and SKIP buttons
@@ -173,6 +199,21 @@ async def send_batch_for_approval(
             f"   {t['side'].upper()} {t['contracts']}x @ {t['price_cents']}c"
             f" = ${cost:.2f} → +${profit:.2f} ({roi:.0f}%)"
         )
+        # Show probability, grade, settlement from metadata
+        t_meta = t.get("metadata", {})
+        detail_parts = []
+        t_wr = t_meta.get("win_rate", 0)
+        t_grade = t_meta.get("grade", "")
+        t_close = t_meta.get("close_time", "")
+        if t_wr:
+            detail_parts.append(f"{t_wr:.1%} win")
+        if t_grade:
+            detail_parts.append(f"Grade: {t_grade}")
+        t_settle = _format_settlement_time(t_close)
+        if t_settle:
+            detail_parts.append(f"Settles {t_settle}")
+        if detail_parts:
+            lines.append(f"   {' | '.join(detail_parts)}")
         if t.get("description"):
             lines.append(f"   {t['description']}")
         lines.append("")
@@ -246,6 +287,16 @@ async def handle_trade_callback(chat_id: str, message_id: int, callback_data: st
         await bot.edit_message_text(chat_id, message_id, "\u23f0 Trade expired or already handled.")
         return
 
+    # Enforce expiry at button press time (not just on cleanup)
+    elapsed = time.time() - trade["created_at"]
+    if elapsed > TRADE_EXPIRY_SECONDS:
+        trade["status"] = "expired"
+        del _pending_trades[trade_id]
+        await bot.answer_callback_query(callback_query_id, "Trade expired (30+ min old)")
+        await bot.edit_message_text(chat_id, message_id, "\u23f0 Trade expired — prices are stale. Wait for next scan.")
+        logger.info(f"Trade {trade_id} expired on button press ({elapsed:.0f}s old)")
+        return
+
     if trade["status"] != "pending":
         await bot.answer_callback_query(callback_query_id, f"Already {trade['status']}")
         return
@@ -268,20 +319,27 @@ async def handle_trade_callback(chat_id: str, message_id: int, callback_data: st
         await bot.answer_callback_query(callback_query_id, "Executing trades...")
 
         if trade.get("type") == "batch":
-            # Execute all trades in the batch
+            # Execute all trades in the batch — continue even if one fails
             results = []
             for t in trade["trades"]:
-                result = place_order(
-                    ticker=t["ticker"],
-                    side=t["side"],
-                    contracts=t["contracts"],
-                    price_cents=t["price_cents"],
-                    strategy=trade["strategy"],
-                    metadata=t.get("metadata", {}),
-                )
+                try:
+                    result = place_order(
+                        ticker=t["ticker"],
+                        side=t["side"],
+                        contracts=t["contracts"],
+                        price_cents=t["price_cents"],
+                        strategy=trade["strategy"],
+                        metadata=t.get("metadata", {}),
+                    )
+                except Exception as e:
+                    logger.error(f"Batch trade {t['ticker']} failed: {e}")
+                    result = {"status": "error", "error": str(e), "ticker": t["ticker"], "cost": 0}
                 results.append(result)
-                await send_trade_notification(result, trade["strategy"],
-                    t.get("description", ""))
+                try:
+                    await send_trade_notification(result, trade["strategy"],
+                        t.get("description", ""))
+                except Exception as e:
+                    logger.error(f"Notification failed for {t['ticker']}: {e}")
 
             filled = sum(1 for r in results if r.get("status") == "filled")
             total = len(results)

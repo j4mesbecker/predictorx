@@ -149,6 +149,79 @@ async def check_spx_price():
             )
 
 
+def compute_dip_buy_calls(spx_price: float, ref_date: date = None) -> list[dict]:
+    """
+    Compute ATM/OTM call options for SPY and QQQ at the current SPX price.
+    Minimum 14 DTE, no weeklies (multi-day selloffs kill them).
+    Reusable by both live alerts and daily TOS intelligence.
+    """
+    today = ref_date or date.today()
+    spy_price = spx_price / 10
+    qqq_est = spx_price * 0.0883  # QQQ/SPX ratio
+
+    # Dynamic expiry: next Friday that's at least 14 days out
+    min_exp = today + timedelta(days=14)
+    days_to_friday = (4 - min_exp.weekday()) % 7
+    exp_date = min_exp + timedelta(days=days_to_friday)
+    exp_str = exp_date.strftime("%b %d")
+
+    atm_spy = round(spy_price)
+    atm_qqq = round(qqq_est)
+
+    return [
+        {"ticker": "SPY", "strike": f"{atm_spy}C", "label": "ATM at dip",
+         "note": f"SPY ~${spy_price:.0f} now — {exp_str} exp (14+ DTE)"},
+        {"ticker": "SPY", "strike": f"{atm_spy + 3}C", "label": "+$3 OTM",
+         "note": f"Cheaper, more leverage — {exp_str} exp"},
+        {"ticker": "QQQ", "strike": f"{atm_qqq}C", "label": "ATM at dip",
+         "note": f"QQQ ~${qqq_est:.0f} now — {exp_str} exp (14+ DTE)"},
+        {"ticker": "QQQ", "strike": f"{atm_qqq + 5}C", "label": "+$5 OTM",
+         "note": f"Cheaper QQQ — {exp_str} exp"},
+    ]
+
+
+def compute_put_credit_spreads(spx_price: float, drop_pct: float, regime: str) -> list[dict]:
+    """
+    Compute put credit spread suggestions for TOS.
+    Returns list of trade dicts with instrument, action, expiry, risk.
+    Reusable by both live alerts and daily TOS intelligence.
+    """
+    trades = []
+
+    # SPY put credit spread
+    spy_info = TOS_INSTRUMENTS.get("SPY", {})
+    if spy_info.get("max_contracts", 0) > 0:
+        spy_price = spx_price / 10
+        short_strike = round(spy_price * (1 - drop_pct / 100), 0)
+        long_strike = short_strike - spy_info["spread_width"]
+        trades.append({
+            "instrument": "SPY",
+            "action": f"SELL {short_strike}p / BUY {long_strike}p",
+            "expiry": "0DTE or weekly",
+            "risk": spy_info["max_risk_per_spread"] * spy_info["max_contracts"],
+        })
+
+    # /MES long — only LOW/LOW_MED
+    mes_info = TOS_INSTRUMENTS.get("/MES", {})
+    if mes_info.get("max_contracts", 0) > 0 and regime in ("LOW", "LOW_MED"):
+        trades.append({
+            "instrument": "/MES",
+            "action": f"BUY 1 @ ~{spx_price:.0f}",
+            "margin": mes_info["margin"],
+        })
+
+    # /MNQ long — only LOW
+    mnq_info = TOS_INSTRUMENTS.get("/MNQ", {})
+    if mnq_info.get("max_contracts", 0) > 0 and regime == "LOW":
+        trades.append({
+            "instrument": "/MNQ",
+            "action": "BUY 1",
+            "margin": mnq_info["margin"],
+        })
+
+    return trades
+
+
 def _build_trade_alert(drop_pct: float, spx_price: float, spx_open: float,
                        change_pct: float, vix_price: float, regime: str) -> dict:
     """
@@ -212,67 +285,30 @@ def _build_trade_alert(drop_pct: float, spx_price: float, spx_open: float,
     month_safe = month in SAFE_MONTHS
     dow_rate = DOW_DROP2_RATE.get(dow, 0.043)
 
-    # ── Dip-Buy Call Options (for -1% and -1.5% alerts) ──────
-    # FIXED: Use CURRENT dip price for strikes (not open price)
-    # FIXED: Dynamic expiry — minimum 14 DTE (weeklies die on multi-day drops)
+    # ── Dip-Buy Call Options and ToS Trades ──────────────────
     call_options = []
     if drop_pct <= 1.5 and not blocked:
-        spy_price = spx_price / 10  # Current SPY price at the dip
-        qqq_est = spx_price * 0.0883  # QQQ/SPX ratio ~0.0883
+        call_options = compute_dip_buy_calls(spx_price, today)
 
-        # Dynamic expiry: find next Friday that's at least 14 days out
-        min_exp = today + timedelta(days=14)
-        days_to_friday = (4 - min_exp.weekday()) % 7
-        exp_date = min_exp + timedelta(days=days_to_friday)
-        exp_str = exp_date.strftime("%b %d")
-
-        # Strikes based on CURRENT dip price (not open)
-        atm_spy = round(spy_price)
-        atm_qqq = round(qqq_est)
-        call_options = [
-            {"ticker": "SPY", "strike": f"{atm_spy}C", "label": "ATM at dip",
-             "note": f"SPY ~${spy_price:.0f} now — {exp_str} exp (14+ DTE)"},
-            {"ticker": "SPY", "strike": f"{atm_spy + 3}C", "label": "+$3 OTM",
-             "note": f"Cheaper, more leverage — {exp_str} exp"},
-            {"ticker": "QQQ", "strike": f"{atm_qqq}C", "label": "ATM at dip",
-             "note": f"QQQ ~${qqq_est:.0f} now — {exp_str} exp (14+ DTE)"},
-            {"ticker": "QQQ", "strike": f"{atm_qqq + 5}C", "label": "+$5 OTM",
-             "note": f"Cheaper QQQ — {exp_str} exp"},
-        ]
-
-    # ── Build ToS trades ─────────────────────────────────────
     tos_trades = []
     if TOS_ENABLED and not blocked:
-        # SPY put credit spread
-        spy_info = TOS_INSTRUMENTS.get("SPY", {})
-        if spy_info.get("max_contracts", 0) > 0:
-            spy_price = spx_price / 10
-            short_strike = round(spy_price * (1 - drop_pct / 100), 0)
-            long_strike = short_strike - spy_info["spread_width"]
-            tos_trades.append({
-                "instrument": "SPY",
-                "action": f"SELL {short_strike}p / BUY {long_strike}p",
-                "expiry": "0DTE or weekly",
-                "risk": spy_info["max_risk_per_spread"] * spy_info["max_contracts"],
-            })
+        tos_trades = compute_put_credit_spreads(spx_price, drop_pct, regime)
 
-        # /MES long — only LOW/LOW_MED
-        mes_info = TOS_INSTRUMENTS.get("/MES", {})
-        if mes_info.get("max_contracts", 0) > 0 and regime in ("LOW", "LOW_MED"):
-            tos_trades.append({
-                "instrument": "/MES",
-                "action": f"BUY 1 @ ~{spx_price:.0f}",
-                "margin": mes_info["margin"],
-            })
-
-        # /MNQ long — only LOW
-        mnq_info = TOS_INSTRUMENTS.get("/MNQ", {})
-        if mnq_info.get("max_contracts", 0) > 0 and regime == "LOW":
-            tos_trades.append({
-                "instrument": "/MNQ",
-                "action": "BUY 1",
-                "margin": mnq_info["margin"],
-            })
+    # ── Naked Put Signal (options strategy) ───────────────────
+    naked_put = None
+    if drop_pct <= 2.0 and not blocked and regime in ("LOW", "LOW_MED", "MEDIUM"):
+        try:
+            from core.strategies.options_strategy import compute_naked_put_signal
+            naked_put = compute_naked_put_signal(
+                ticker="SPY",
+                current_price=spx_price / 10,
+                vix_price=vix_price,
+                regime=regime,
+                trigger_type="spx_dip",
+                drop_pct=drop_pct,
+            )
+        except Exception as e:
+            logger.debug(f"Naked put signal error: {e}")
 
     return {
         "drop_pct": drop_pct,
@@ -295,6 +331,7 @@ def _build_trade_alert(drop_pct: float, spx_price: float, spx_open: float,
         "dow_rate": dow_rate,
         "tos_trades": tos_trades,
         "call_options": call_options,
+        "naked_put": naked_put,
     }
 
 
@@ -307,35 +344,35 @@ def _build_vix_reversion_alert(spx_price: float, spx_open: float,
     Feb 5-6 backtest: VIX 21.8→20.4, SPY bounced +1.34%, QQQ +1.58%.
     """
     today = date.today()
-    spy_price = spx_price / 10
-    qqq_est = spx_price * 0.0883
 
-    # Dynamic expiry: minimum 14 DTE
+    # Dynamic expiry for display
     min_exp = today + timedelta(days=14)
     days_to_friday = (4 - min_exp.weekday()) % 7
     exp_date = min_exp + timedelta(days=days_to_friday)
     exp_str = exp_date.strftime("%b %d")
 
-    # Strikes at current price (the bottom)
-    atm_spy = round(spy_price)
-    atm_qqq = round(qqq_est)
-
-    call_options = [
-        {"ticker": "SPY", "strike": f"{atm_spy}C", "label": "ATM",
-         "note": f"SPY ~${spy_price:.0f} — {exp_str} exp (14+ DTE)"},
-        {"ticker": "SPY", "strike": f"{atm_spy + 3}C", "label": "+$3 OTM",
-         "note": f"More leverage — {exp_str} exp"},
-        {"ticker": "QQQ", "strike": f"{atm_qqq}C", "label": "ATM",
-         "note": f"QQQ ~${qqq_est:.0f} — higher beta — {exp_str} exp"},
-        {"ticker": "QQQ", "strike": f"{atm_qqq + 5}C", "label": "+$5 OTM",
-         "note": f"Cheaper QQQ — {exp_str} exp"},
-    ]
+    call_options = compute_dip_buy_calls(spx_price, today)
 
     blocked = False
     block_reasons = []
     if today.strftime("%Y-%m-%d") in BLACKOUT_DATES:
         blocked = True
         block_reasons.append("FOMC/CPI/NFP blackout day")
+
+    # ── Naked Put Signal — highest conviction entry ───────────
+    naked_put = None
+    if not blocked:
+        try:
+            from core.strategies.options_strategy import compute_naked_put_signal
+            naked_put = compute_naked_put_signal(
+                ticker="SPY",
+                current_price=spx_price / 10,
+                vix_price=vix_price,
+                regime=regime,
+                trigger_type="vix_reversion",
+            )
+        except Exception as e:
+            logger.debug(f"VIX reversion naked put error: {e}")
 
     return {
         "alert_type": "vix_reversion",
@@ -349,6 +386,7 @@ def _build_vix_reversion_alert(spx_price: float, spx_open: float,
         "exp_str": exp_str,
         "blocked": blocked,
         "block_reasons": block_reasons,
+        "naked_put": naked_put,
     }
 
 

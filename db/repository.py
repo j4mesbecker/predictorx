@@ -14,7 +14,7 @@ from sqlalchemy.orm import sessionmaker, Session
 from db.models import (
     Base, PredictionRecord, WeatherForecastRecord, VixSnapshotRecord,
     WhaleSignalRecord, DailyPerformanceRecord, CalibrationSnapshotRecord,
-    AlertRecord, MarketCacheRecord
+    AlertRecord, MarketCacheRecord, ExternalIntelRecord
 )
 from core.models import Prediction, VixSnapshot, WhaleSignal
 
@@ -206,3 +206,33 @@ class Repository:
                 record = MarketCacheRecord(ticker=ticker, **data)
                 session.add(record)
             session.commit()
+
+    # ── External Intel ─────────────────────────────────────
+
+    def save_external_intel(self, records: list[dict]):
+        """Bulk insert external trader intel entries."""
+        with self._session() as session:
+            for r in records:
+                record = ExternalIntelRecord(
+                    source=r.get("source", ""),
+                    date=r.get("date", date.today()),
+                    ticker=r.get("ticker", ""),
+                    level_type=r.get("level_type"),
+                    level_price=r.get("level_price"),
+                    sentiment=r.get("sentiment"),
+                    note=r.get("note"),
+                    raw_text=r.get("raw_text"),
+                )
+                session.add(record)
+            session.commit()
+
+    def get_external_intel(self, for_date: date = None, source: str = None) -> list[ExternalIntelRecord]:
+        """Fetch external intel entries for a given date."""
+        target = for_date or date.today()
+        with self._session() as session:
+            q = session.query(ExternalIntelRecord).filter(
+                ExternalIntelRecord.date == target
+            )
+            if source:
+                q = q.filter(ExternalIntelRecord.source == source)
+            return q.order_by(ExternalIntelRecord.created_at.desc()).all()

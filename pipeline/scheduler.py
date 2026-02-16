@@ -16,6 +16,7 @@ from pipeline.tasks import (
     settle_predictions,
     daily_performance_snapshot,
     update_calibration,
+    generate_tos_daily_intel,
 )
 from pipeline.spx_monitor import check_spx_price
 from pipeline.stock_monitor import check_stock_levels
@@ -98,10 +99,23 @@ def create_scheduler() -> AsyncIOScheduler:
     scheduler.add_job(
         scan_spx_brackets,
         CronTrigger(
-            hour="8-16", minute="0,15,30,45", day_of_week="mon-fri",
+            hour="8-16", minute="5,20,35,50", day_of_week="mon-fri",
         ),
         id="spx_bracket_scan",
         name="SPX Bracket Scanner (15min)",
+        replace_existing=True,
+    )
+
+    # ── TOS Daily Intelligence Report ───────────────────────
+
+    # Morning pre-market TOS intel — 7:15 AM ET (6:15 AM CST) weekdays
+    # Read-only intelligence for ThinkOrSwim: SPX levels, dip-buy calls,
+    # put credit spreads, catalyst calendar, VIX reversion status
+    scheduler.add_job(
+        generate_tos_daily_intel,
+        CronTrigger(hour=7, minute=15, day_of_week="mon-fri"),
+        id="tos_daily_intel",
+        name="TOS Daily Intelligence (6:15 AM CST)",
         replace_existing=True,
     )
 

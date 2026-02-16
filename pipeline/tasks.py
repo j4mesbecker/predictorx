@@ -259,6 +259,23 @@ async def fetch_whale_activity():
         logger.error(f"Whale fetch error: {e}")
 
 
+# ── Market Holiday Calendar ────────────────────────────────
+
+def _get_market_holidays() -> set[str]:
+    """NYSE market holidays for 2026 (dates markets are closed)."""
+    return {
+        "2026-01-01",  # New Year's Day
+        "2026-01-19",  # MLK Jr. Day
+        "2026-02-17",  # Presidents Day (Mon Feb 17)
+        "2026-04-03",  # Good Friday
+        "2026-05-25",  # Memorial Day
+        "2026-07-03",  # Independence Day (observed)
+        "2026-09-07",  # Labor Day
+        "2026-11-26",  # Thanksgiving
+        "2026-12-25",  # Christmas
+    }
+
+
 # ── Prediction Generation ──────────────────────────────────
 
 
@@ -283,15 +300,23 @@ async def generate_predictions():
                 repo.save_prediction(pred)
                 saved += 1
 
-                # Collect weather trades for auto-execution
+                # Collect weather trades for auto-execution (weekends/holidays only)
                 if pred.strategy == "weather" and pred.confidence_score >= 0.60:
                     weather_to_execute.append(pred)
 
         logger.info(f"Generated {len(opportunities)} opportunities, saved {saved} predictions")
 
-        # Auto-execute weather trades on Kalshi
+        # Auto-execute weather trades on Kalshi — weekends and market holidays only
+        # SPX brackets run on trading days; weather fills the gaps
         if weather_to_execute:
-            await _execute_weather_trades(weather_to_execute)
+            from datetime import date
+            today = date.today()
+            is_weekend = today.weekday() >= 5  # Saturday=5, Sunday=6
+            is_market_holiday = today.strftime("%Y-%m-%d") in _get_market_holidays()
+            if is_weekend or is_market_holiday:
+                await _execute_weather_trades(weather_to_execute)
+            else:
+                logger.info(f"Skipping {len(weather_to_execute)} weather trades — weekday trading day (weather runs weekends only)")
 
     except Exception as e:
         logger.error(f"Prediction generation error: {e}")
@@ -363,6 +388,7 @@ async def _execute_weather_trades(predictions: list):
                 "win_rate": pred.confidence_factors.get("historical_win_rate", 0),
                 "grade": pred.confidence_factors.get("edge_grade", ""),
                 "consensus_high": pred.confidence_factors.get("consensus_high", 0),
+                "close_time": live_market.get("close_time", ""),
             },
         })
 
@@ -401,6 +427,14 @@ async def settle_predictions():
                     pnl = record.recommended_cost if outcome == "win" else -record.recommended_cost
                     repo.settle_prediction(record.id, outcome, result, pnl)
                     settled += 1
+
+                    # Track realized losses for daily loss limit
+                    if outcome == "loss" and pnl < 0:
+                        try:
+                            from pipeline.kalshi_executor import record_realized_loss
+                            record_realized_loss(abs(pnl))
+                        except Exception:
+                            pass
 
         logger.info(f"Settled {settled}/{len(pending)} predictions")
 
@@ -532,3 +566,205 @@ async def update_calibration():
 
     except Exception as e:
         logger.error(f"Calibration update error: {e}")
+
+
+# ── TOS Daily Intelligence Report ─────────────────────────
+
+
+async def generate_tos_daily_intel():
+    """
+    Morning pre-market TOS intelligence report.
+    Runs at 6:15 AM CST (7:15 AM ET) before market open.
+    Read-only — no APPROVE/SKIP buttons, just actionable intel for ThinkOrSwim.
+
+    Pulls: SPX price, VIX/regime, bracket support/resistance, dip-buy calls,
+    put credit spreads, catalyst calendar, VIX reversion status.
+    """
+    from math import sqrt
+    from config.constants import (
+        BLACKOUT_DATES, BLACKOUT_LABELS, TAIL_WIN_RATES,
+    )
+    from pipeline.spx_monitor import compute_dip_buy_calls, compute_put_credit_spreads
+    from pipeline.spx_bracket_scanner import _fetch_spx_price, _fetch_spx_brackets
+    from telegram.formatters import format_tos_daily_intel
+    from telegram.bot import get_bot
+
+    bot = get_bot()
+    if not bot.configured:
+        return
+
+    today = date.today()
+    today_str = today.strftime("%Y-%m-%d")
+
+    # Only weekdays
+    if today.weekday() >= 5:
+        return
+
+    logger.info("Generating TOS daily intelligence report...")
+
+    # ── Fetch SPX price ───────────────────────────────────────
+    spx_data = _fetch_spx_price()
+    if not spx_data or not spx_data.get("price"):
+        logger.warning("TOS intel: no SPX price available")
+        return
+
+    spx_price = spx_data["price"]
+    prev_close = spx_data.get("prev_close", spx_price)
+    change_pct = ((spx_price - prev_close) / prev_close * 100) if prev_close else 0
+
+    # ── Fetch VIX ─────────────────────────────────────────────
+    vix_price = 0
+    regime = "MEDIUM"
+    try:
+        from adapters.kalshi_data import get_vix
+        vix_data = get_vix()
+        vix_price = vix_data.get("price", 0)
+        regime = vix_data.get("regime", "MEDIUM")
+    except Exception:
+        pass
+
+    # ── Expected weekly move from VIX ─────────────────────────
+    # VIX is annualized implied vol; weekly move = VIX / sqrt(52) * SPX / 100
+    weekly_move = None
+    if vix_price > 0 and spx_price > 0:
+        weekly_move = (vix_price / 100) * spx_price / sqrt(52)
+
+    # ── Bracket support/resistance ────────────────────────────
+    bracket_levels = []
+    try:
+        markets = _fetch_spx_brackets()
+        if markets:
+            # Build support/resistance from bracket NO win rates
+            # Brackets BELOW SPX = support, brackets ABOVE = resistance
+            for m in markets:
+                yes_price = m.get("yes_ask") or m.get("yes_bid", 0)
+                if yes_price <= 0:
+                    continue
+                no_wr = (100 - yes_price) / 100.0  # NO win rate proxy
+                distance = m["bracket_mid"] - spx_price
+
+                if abs(distance) < 25:
+                    continue  # Skip brackets too close to current price
+
+                level = {
+                    "price": m["bracket_mid"],
+                    "bracket_low": m["bracket_low"],
+                    "bracket_high": m["bracket_high"],
+                    "win_rate": no_wr if no_wr >= 0.80 else None,
+                    "yes_price": yes_price,
+                }
+
+                if distance < 0 and no_wr >= 0.85:
+                    level["label"] = "Support"
+                    if no_wr >= 0.94:
+                        level["label"] = "Strong support"
+                    bracket_levels.append(level)
+                elif distance > 0 and no_wr >= 0.85:
+                    level["label"] = "Resistance"
+                    if no_wr >= 0.94:
+                        level["label"] = "Strong resistance"
+                    bracket_levels.append(level)
+
+            # Sort: support descending, resistance ascending — closest to SPX first
+            supports = sorted(
+                [l for l in bracket_levels if "support" in l["label"].lower()],
+                key=lambda x: x["price"], reverse=True,
+            )[:3]
+            resistances = sorted(
+                [l for l in bracket_levels if "resistance" in l["label"].lower()],
+                key=lambda x: x["price"],
+            )[:3]
+            bracket_levels = supports + resistances
+    except Exception as e:
+        logger.debug(f"TOS intel bracket fetch: {e}")
+
+    # ── Dip buy call options ──────────────────────────────────
+    dip_level = spx_price * 0.99  # -1% dip target
+    call_options = compute_dip_buy_calls(spx_price, today)
+
+    # Bounce rate from regime
+    bounce_rates = {"LOW": 98, "LOW_MED": 98, "MEDIUM": 95, "HIGH": 85, "CRISIS": 70}
+    bounce_rate = bounce_rates.get(regime, 95)
+
+    # ── Put credit spreads ────────────────────────────────────
+    put_credit_spreads = compute_put_credit_spreads(spx_price, 1.0, regime)
+
+    # ── Catalyst calendar ─────────────────────────────────────
+    catalyst = None
+    if today_str in BLACKOUT_DATES:
+        catalyst = BLACKOUT_LABELS.get(today_str, {
+            "name": "FOMC/CPI/NFP", "time": "", "guidance": "Wait for data release before entering",
+        })
+
+    # ── VIX reversion note ────────────────────────────────────
+    vix_note = None
+    if vix_price >= 20:
+        vix_note = f"VIX at {vix_price:.1f} (>20) — watch for reversion below 19 = HIGH CONVICTION BUY CALLS"
+    elif vix_price >= 18:
+        vix_note = f"VIX {vix_price:.1f} — elevated, reversion armed if spikes >20 then drops <19"
+
+    # ── External trader intel (Brando/EliteOptions) ─────────
+    external_intel = None
+    try:
+        from pathlib import Path
+        intel_path = Path("data/external_intel/brando_levels.json")
+        if intel_path.exists():
+            with open(intel_path) as f:
+                ext = json.load(f)
+            if ext.get("date") == today_str:
+                external_intel = ext
+    except Exception as e:
+        logger.debug(f"External intel load: {e}")
+
+    # ── Options playbook (naked puts/calls intel) ─────────────
+    options_intel = None
+    try:
+        from core.strategies.options_strategy import compute_daily_options_intel
+        brando_for_options = None
+        if external_intel and external_intel.get("levels"):
+            brando_for_options = external_intel["levels"]
+        options_intel = compute_daily_options_intel(
+            spx_price=spx_price,
+            vix_price=vix_price,
+            regime=regime,
+            brando_levels=brando_for_options,
+            bracket_levels=bracket_levels if bracket_levels else None,
+        )
+    except Exception as e:
+        logger.debug(f"Options intel computation error: {e}")
+
+    # ── Blocked? ──────────────────────────────────────────────
+    blocked = False
+    block_reasons = []
+    if regime in ("HIGH", "CRISIS"):
+        blocked = True
+        block_reasons.append(f"VIX {regime} — reduce size, no aggressive entries")
+    if catalyst:
+        block_reasons.append(f"{catalyst['name']} today — {catalyst.get('guidance', 'wait for data')}")
+
+    # ── Build intel dict ──────────────────────────────────────
+    day_label = today.strftime("%a %b %d")
+    intel = {
+        "date_str": day_label,
+        "spx_price": spx_price,
+        "vix_price": vix_price,
+        "regime": regime,
+        "futures_change_pct": round(change_pct, 1) if change_pct != 0 else None,
+        "expected_weekly_move": round(weekly_move) if weekly_move else None,
+        "bracket_levels": bracket_levels,
+        "dip_level": round(dip_level),
+        "call_options": call_options,
+        "bounce_rate": bounce_rate,
+        "put_credit_spreads": put_credit_spreads,
+        "catalyst": catalyst,
+        "vix_note": vix_note,
+        "blocked": blocked,
+        "block_reasons": block_reasons,
+        "external_intel": external_intel,
+        "options_intel": options_intel,
+    }
+
+    # ── Format and send ───────────────────────────────────────
+    text = format_tos_daily_intel(intel)
+    await bot.send_message(text)
+    logger.info(f"TOS daily intel sent: SPX {spx_price:,.0f} VIX {vix_price:.1f} ({regime})")

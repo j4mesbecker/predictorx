@@ -1,6 +1,6 @@
 """
 PredictorX — SQLAlchemy ORM Models
-8 tables for predictions, weather, VIX, whales, performance, calibration, alerts, market cache.
+9 tables for predictions, weather, VIX, whales, performance, calibration, alerts, market cache, external intel.
 """
 
 from datetime import datetime
@@ -186,6 +186,21 @@ class MarketCacheRecord(Base):
     status = Column(String)
     result = Column(String)
     updated_at = Column(DateTime, default=datetime.utcnow)
+
+
+class ExternalIntelRecord(Base):
+    __tablename__ = "external_intel"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    source = Column(String, nullable=False, index=True)
+    date = Column(Date, nullable=False, index=True)
+    ticker = Column(String, nullable=False)
+    level_type = Column(String)
+    level_price = Column(Float)
+    sentiment = Column(String)
+    note = Column(Text)
+    raw_text = Column(Text)
+    created_at = Column(DateTime, default=datetime.utcnow)
 
 
 def init_db(database_url: str):
