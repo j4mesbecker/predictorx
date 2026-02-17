@@ -60,6 +60,10 @@ async def check_spx_price():
     Detects intraday drops, checks safety gates, fires trade alerts.
     Also monitors VIX for regime transition (spike + reversion) signals.
     """
+    from pipeline.tasks import is_market_open_today
+    if not is_market_open_today():
+        return
+
     global _spx_open, _prev_day_return
     global _vix_peak_today, _vix_crossed_above_20, _vix_reversion_fired
 

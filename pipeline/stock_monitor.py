@@ -321,6 +321,10 @@ async def check_stock_levels():
     Main polling function — called every 2 min during market hours.
     Checks all watched stocks against their key levels.
     """
+    from pipeline.tasks import is_market_open_today
+    if not is_market_open_today():
+        return
+
     _reset_if_new_day()
 
     for ticker, config in WATCHED_STOCKS.items():

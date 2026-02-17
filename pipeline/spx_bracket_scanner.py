@@ -277,6 +277,12 @@ async def scan_spx_brackets(force: bool = False):
     Args:
         force: If True, scan even if already scanned recently
     """
+    # Skip market holidays (Presidents Day, etc.) — no SPX movement
+    from pipeline.tasks import is_market_open_today
+    if not is_market_open_today() and not force:
+        logger.info("SPX bracket scanner: market holiday — skipping")
+        return
+
     global _scans_today
 
     _reset_if_new_day()

@@ -196,6 +196,8 @@ def _save_weather_forecast(repo: Repository, f: WeatherForecast):
 
 async def fetch_vix_data():
     """Fetch VIX level and S&P price, save snapshot."""
+    if not is_market_open_today():
+        return
     logger.info("Fetching VIX data...")
     repo = _get_repo()
 
@@ -274,6 +276,16 @@ def _get_market_holidays() -> set[str]:
         "2026-11-26",  # Thanksgiving
         "2026-12-25",  # Christmas
     }
+
+
+def is_market_open_today() -> bool:
+    """Check if today is a trading day (not weekend, not NYSE holiday)."""
+    today = date.today()
+    if today.weekday() >= 5:
+        return False
+    if today.strftime("%Y-%m-%d") in _get_market_holidays():
+        return False
+    return True
 
 
 # ── Prediction Generation ──────────────────────────────────
@@ -463,6 +475,8 @@ async def _check_market_result(ticker: str) -> str | None:
 
 async def daily_performance_snapshot():
     """Calculate and store daily performance metrics."""
+    if not is_market_open_today():
+        return
     logger.info("Computing daily performance...")
     repo = _get_repo()
 
@@ -596,8 +610,8 @@ async def generate_tos_daily_intel():
     today = date.today()
     today_str = today.strftime("%Y-%m-%d")
 
-    # Only weekdays
-    if today.weekday() >= 5:
+    # Only trading days (skip weekends + market holidays like Presidents Day)
+    if not is_market_open_today():
         return
 
     logger.info("Generating TOS daily intelligence report...")
