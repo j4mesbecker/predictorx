@@ -4,7 +4,7 @@ Polls individual stocks every 2 min during market hours (9:30 AM - 4 PM ET).
 Fires Telegram alerts when key technical levels are hit or approached.
 
 Currently tracking:
-  SPY  — S&P 500 ETF ($650 support → $675 demand → $698 ATH → $700/$720 breakout)
+  SPY  — S&P 500 ETF ($650 support → $675 demand → $690 delta → $695 strike → $698 ATH → $700/$720 breakout)
   QQQ  — Nasdaq 100 ETF ($580 support → $595 demand → $637 ATH → $650 breakout)
   TSLA — Breakout play ($363 support → $441 breakout → $500/$572/$700 targets)
   NVDA — Supply/demand zones ($171 demand → $194 supply → $212 ATH)
@@ -27,7 +27,8 @@ from datetime import date
 logger = logging.getLogger(__name__)
 
 # ── SPY Key Levels (S&P 500 ETF) ───────────────────────────
-# Current: ~$681 | SMA20: $690 | SMA50: $687 | ATH: $698
+# Current: ~$683 | SMA50: $687 | ATH: $698
+# LIVE POSITION: Feb 27 695C @ $3.02 | Breakeven: $698.02 | Cut at $1.50
 SPY_LEVELS = {
     "SPY_SUPPORT_650": {
         "price": 650.0,
@@ -51,27 +52,41 @@ SPY_LEVELS = {
         "action": "ABOVE 50 SMA — Trend structure intact. Bullish.",
         "trade": "BUY SPY calls ATM 14+ DTE. Trend following entry.",
     },
+    "SPY_DELTA_ZONE_690": {
+        "price": 690.0,
+        "label": "695C Delta Zone",
+        "direction": "above",
+        "action": "690 APPROACHING — Your 695C gaining delta fast. Watch for momentum.",
+        "trade": "HOLD 695C. Delta accelerating. DO NOT take profit yet — target is $698-700.",
+    },
+    "SPY_STRIKE_695": {
+        "price": 695.0,
+        "label": "695C Strike",
+        "direction": "above",
+        "action": "695 HIT — Your Feb 27 695C is now ATM. Intrinsic value building.",
+        "trade": "HOLD if momentum strong. Take 50% profit at $5.00-6.00 to lock in cost basis.",
+    },
     "SPY_ATH_698": {
         "price": 698.0,
-        "label": "All-Time High",
+        "label": "ATH / 695C Breakeven",
         "direction": "above",
-        "action": "ATH TEST — $698 is the ceiling. Watch for rejection or breakout.",
-        "trade": "If breakout: BUY SPY 710C 30+ DTE. If rejection: wait for retest.",
+        "action": "ATH $698 — Your 695C breakeven at $698.02. Profitable at expiry above here.",
+        "trade": "Take 50% off at $5-6. Let runner ride toward $700.",
         "options_zone": "supply",
     },
     "SPY_BREAKOUT_700": {
         "price": 700.0,
-        "label": "$700 Psychological",
+        "label": "$700 Breakout",
         "direction": "above",
-        "action": "$700 CLEARED — Psychological breakout. Momentum accelerates.",
-        "trade": "BUY SPY 720C 30+ DTE. Trail stops. Let it run.",
+        "action": "$700 CLEARED — Brando thesis confirmed. SPX 7000. Your 695C worth $5+.",
+        "trade": "Trail stop on remaining position. If SPX targets 7400, SPY $740 in play.",
     },
     "SPY_TARGET_720": {
         "price": 720.0,
         "label": "Upside Target",
         "direction": "above",
-        "action": "$720 TARGET — Extended move. Take profits on swing positions.",
-        "trade": "Sell 75% of calls. Keep small runner for $740.",
+        "action": "$720 TARGET — Extended move. Take all profits on 695C.",
+        "trade": "Close position. Reassess for next entry.",
     },
 }
 
