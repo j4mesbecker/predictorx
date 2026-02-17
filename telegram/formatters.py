@@ -322,6 +322,8 @@ def format_stock_level_alert(alert: dict) -> str:
 
     if d["alert_type"] == "stock_proximity":
         # ── Proximity warning ──────────────────────────────
+        lines.append(f"\U0001f4ca <b>LEVEL ALERT</b> [BRANDO]")
+        lines.append("")
         direction = "\u2191" if d["direction"] == "above" else "\u2193"
         lines.append(
             f"<b>{ticker} ${price:.2f}</b> ({change_pct:+.1f}%)"
@@ -351,6 +353,8 @@ def format_stock_level_alert(alert: dict) -> str:
         return "\n".join(lines)
 
     # ── Level hit ──────────────────────────────────────────
+    lines.append(f"\U0001f4ca <b>LEVEL ALERT</b> [BRANDO]")
+    lines.append("")
     lines.append(
         f"<b>{ticker} ${price:.2f}</b> ({change_pct:+.1f}%)"
         f"  |  <b>{d['level_label']} ${d['level_price']:.0f}</b>"
