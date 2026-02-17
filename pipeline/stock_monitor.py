@@ -9,6 +9,7 @@ Currently tracking:
   TSLA — Breakout play ($363 support → $441 breakout → $500/$572/$700 targets)
   NVDA — Supply/demand zones ($171 demand → $194 supply → $212 ATH)
   PLTR — Momentum pullback ($120 demand → $150 pivot → $187 supply → $207 ATH)
+  META — Brando play ($620 support → $645 call trigger → $670 weekly target)
 
 Alerts fire once per level per day. Proximity alerts (within 2%) fire separately.
 Each level-hit alert includes a Finviz chart image.
@@ -262,6 +263,34 @@ PLTR_LEVELS = {
     },
 }
 
+# ── META Key Levels (EliteOptionsTrader — Feb 17) ────────
+# Current: gapping up with market lower. Calls work above 645.
+META_LEVELS = {
+    "META_SUPPORT_620": {
+        "price": 620.0,
+        "label": "Support Floor",
+        "direction": "below",
+        "action": "SUPPORT — Below recent range. Wait for stabilization.",
+        "trade": "Do NOT buy calls. Wait for 645 reclaim.",
+    },
+    "META_TRIGGER_645": {
+        "price": 645.0,
+        "label": "Brando Call Trigger",
+        "direction": "above",
+        "action": "645 RECLAIMED — Brando says calls work above here. Target 670.",
+        "trade": "BUY META calls 14+ DTE at current strike. Target 670 by Friday.",
+        "options_zone": "demand",
+    },
+    "META_TARGET_670": {
+        "price": 670.0,
+        "label": "Weekly Target",
+        "direction": "above",
+        "action": "670 HIT — Brando weekly target reached.",
+        "trade": "Take profits on META calls. Reassess for next week.",
+        "options_zone": "supply",
+    },
+}
+
 # All tracked stocks
 WATCHED_STOCKS = {
     "SPY": {"levels": SPY_LEVELS, "chart_ticker": "SPY"},
@@ -269,6 +298,7 @@ WATCHED_STOCKS = {
     "TSLA": {"levels": TSLA_LEVELS, "chart_ticker": "TSLA"},
     "NVDA": {"levels": NVDA_LEVELS, "chart_ticker": "NVDA"},
     "PLTR": {"levels": PLTR_LEVELS, "chart_ticker": "PLTR"},
+    "META": {"levels": META_LEVELS, "chart_ticker": "META"},
 }
 
 # Proximity alert threshold

@@ -1,0 +1,28 @@
+{
+    "source": "EliteOptionsTrader",
+    "updated_at": "2026-02-17T08:00:00",
+    "date": "2026-02-17",
+    "sentiment": "cautious",
+    "psychology": "Be careful this week, expect more volatility. Supreme Court tariff decision possible Friday. SPX needs to move red to green for 6900 this week. Hold above 6824 key. META gapping up with market lower — calls work above 645. QQQ all about 600 — needs to reclaim and hold.",
+    "catalyst": "Supreme Court tariff decision possible Friday",
+    "levels": [
+        {"ticker": "SPX", "type": "support", "price": 6824, "note": "hold above 6824 — key floor for the week"},
+        {"ticker": "SPX", "type": "resistance", "price": 6900, "note": "red to green → 6900 this week"},
+        {"ticker": "SPX", "type": "resistance", "price": 7000, "note": "needs to break through 7k to trigger run to 7400+"},
+        {"ticker": "SPX", "type": "target", "price": 7400, "note": "upside target if 7k reclaimed"},
+        {"ticker": "META", "type": "trigger", "price": 645, "note": "reclaims 645 → calls work above 645, target 670"},
+        {"ticker": "META", "type": "target", "price": 670, "note": "670 by Friday if 645 reclaimed"},
+        {"ticker": "QQQ", "type": "support", "price": 600, "note": "all about 600 this week — needs to reclaim and hold"},
+        {"ticker": "QQQ", "type": "support", "price": 595, "note": "if QQQ breaks 595, 589 comes fast"},
+        {"ticker": "QQQ", "type": "support", "price": 589, "note": "downside target if 595 breaks"},
+        {"ticker": "QQQ", "type": "target", "price": 607, "note": "hold 600 → setup for 605-607 move"},
+        {"ticker": "NVDA", "type": "resistance", "price": 200, "note": "round number resistance, failed here recently"},
+        {"ticker": "NVDA", "type": "support", "price": 191, "note": "near-term level, price sitting right at it"},
+        {"ticker": "NVDA", "type": "support", "price": 190, "note": "struggling to hold above 190"},
+        {"ticker": "NVDA", "type": "support", "price": 168, "note": "monthly support level"},
+        {"ticker": "NVDA", "type": "demand_zone", "price": 153, "note": "upper demand zone top (153.37) — institutional buyers"},
+        {"ticker": "NVDA", "type": "demand_zone", "price": 141, "note": "upper demand zone bottom (141.20) — buy everything zone"},
+        {"ticker": "NVDA", "type": "resistance", "price": 225, "note": "intermediate resistance on monthly"},
+        {"ticker": "NVDA", "type": "target", "price": 288, "note": "$7T MCAP target — Brando long-term bullish, +50% from current"}
+    ]
+}
