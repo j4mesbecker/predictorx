@@ -109,13 +109,12 @@ ARB_SHARE = 0.15
 
 # ── Kalshi Cities ─────────────────────────────────────────
 KALSHI_STATIONS = {
-    "NYC": {"station": "KNYC", "location": "Central Park", "type": "urban"},
-    "CHI": {"station": "KORD", "location": "O'Hare Airport", "type": "airport"},
-    "MIA": {"station": "KMIA", "location": "Miami Intl", "type": "airport"},
-    "PHI": {"station": "KPHL", "location": "Philly Intl", "type": "airport"},
-    "AUS": {"station": "KAUS", "location": "Austin-Bergstrom", "type": "airport"},
-    "DEN": {"station": "KDEN", "location": "Denver Intl", "type": "airport"},
-    "SFO": {"station": "KSFO", "location": "SFO Intl", "type": "airport"},
+    "NYC": {"station": "KNYC", "location": "Central Park", "type": "urban", "kalshi_ticker": "NY"},
+    "CHI": {"station": "KORD", "location": "O'Hare Airport", "type": "airport", "kalshi_ticker": "CHI"},
+    "MIA": {"station": "KMIA", "location": "Miami Intl", "type": "airport", "kalshi_ticker": "MIA"},
+    "PHI": {"station": "KPHL", "location": "Philly Intl", "type": "airport", "kalshi_ticker": "PHIL"},
+    "AUS": {"station": "KAUS", "location": "Austin-Bergstrom", "type": "airport", "kalshi_ticker": "AUS"},
+    "DEN": {"station": "KDEN", "location": "Denver Intl", "type": "airport", "kalshi_ticker": "DEN"},
 }
 
 # ── Confidence Scoring Weights ────────────────────────────

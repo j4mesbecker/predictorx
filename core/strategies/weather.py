@@ -190,7 +190,7 @@ class WeatherStrategy(Strategy):
         """
         predictions = []
         date_str = target_date.strftime("%Y-%m-%d")
-        date_label = target_date.strftime("%d%b%y").upper()
+        date_label = target_date.strftime("%y%b%d").upper()
 
         # Standard deviation estimate from source spread + baseline
         # More sources = tighter estimate
@@ -261,7 +261,7 @@ class WeatherStrategy(Strategy):
 
             pred = Prediction(
                 strategy="weather",
-                market_ticker=f"KXHIGH{city_code}-{date_label}-T{bracket}",
+                market_ticker=f"KXHIGH{KALSHI_STATIONS[city_code]['kalshi_ticker']}-{date_label}-T{bracket}",
                 market_title=f"{city_code} >= {bracket}F {date_str}",
                 platform="kalshi",
                 predicted_probability=our_prob,

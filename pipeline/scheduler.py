@@ -21,6 +21,7 @@ from pipeline.tasks import (
 from pipeline.spx_monitor import check_spx_price
 from pipeline.stock_monitor import check_stock_levels
 from pipeline.spx_bracket_scanner import scan_spx_brackets
+from pipeline.weather_scanner import scan_weather_markets
 from telegram.scheduled_alerts import register_actionable_alerts
 
 logger = logging.getLogger(__name__)
@@ -103,6 +104,20 @@ def create_scheduler() -> AsyncIOScheduler:
         ),
         id="spx_bracket_scan",
         name="SPX Bracket Scanner (15min)",
+        replace_existing=True,
+    )
+
+    # ── Weather Market Scanner (Kalshi KXHIGH) ─────────────────
+
+    # Weather scanner — 3x/day at 7 AM, 11 AM, 2 PM ET
+    # Fetches LIVE Kalshi weather markets and finds NO sweet spot trades
+    # Weather markets trade 24/7, but we scan during active hours for best pricing
+    # Backed by 11,220-market analysis: 81% NO WR in 15-70c sweet spot
+    scheduler.add_job(
+        scan_weather_markets,
+        CronTrigger(hour="7,11,14", minute=0),
+        id="weather_scan",
+        name="Weather Market Scanner (3x/day)",
         replace_existing=True,
     )
 

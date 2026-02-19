@@ -35,6 +35,12 @@ class PredictorXBot:
     def configured(self) -> bool:
         return bool(self.token and self.chat_id)
 
+    @property
+    def friday_url(self) -> str:
+        """URL for sending via FRIDAY's bot token."""
+        settings = get_settings()
+        return self.BASE_URL.format(token=settings.friday_bot_token) if settings.friday_bot_token else ""
+
     async def _get_client(self) -> httpx.AsyncClient:
         if self._client is None or self._client.is_closed:
             self._client = httpx.AsyncClient(timeout=30)
@@ -88,6 +94,40 @@ class PredictorXBot:
             logger.error(f"Telegram send error: {e}")
             return False
 
+    async def send_via_friday(
+        self, text: str, chat_id: str = None, parse_mode: str = "HTML",
+        reply_markup: dict = None,
+    ) -> dict | bool:
+        """Send a message using FRIDAY's bot token so callbacks route to FRIDAY.
+        Falls back to native send_message if FRIDAY token not configured."""
+        friday = self.friday_url
+        if not friday:
+            return await self.send_message(text, chat_id=chat_id, parse_mode=parse_mode, reply_markup=reply_markup)
+
+        target = chat_id or self.chat_id
+        client = await self._get_client()
+        try:
+            payload = {
+                "chat_id": target,
+                "text": text,
+                "parse_mode": parse_mode,
+                "disable_web_page_preview": True,
+            }
+            if reply_markup:
+                payload["reply_markup"] = reply_markup
+
+            resp = await client.post(f"{friday}/sendMessage", json=payload)
+            data = resp.json()
+            if not data.get("ok"):
+                logger.warning(f"FRIDAY send failed: {data.get('description')} — falling back")
+                return await self.send_message(text, chat_id=chat_id, parse_mode=parse_mode, reply_markup=reply_markup)
+            if reply_markup:
+                return data.get("result", True)
+            return True
+        except Exception as e:
+            logger.error(f"FRIDAY send error: {e} — falling back")
+            return await self.send_message(text, chat_id=chat_id, parse_mode=parse_mode, reply_markup=reply_markup)
+
     async def answer_callback_query(self, callback_query_id: str, text: str = "") -> bool:
         """Answer a callback query (acknowledge button press)."""
         client = await self._get_client()
@@ -119,6 +159,33 @@ class PredictorXBot:
             return resp.json().get("ok", False)
         except Exception:
             return False
+
+    async def edit_via_friday(
+        self, chat_id: str, message_id: int, text: str, parse_mode: str = "HTML",
+    ) -> bool:
+        """Edit a message sent via FRIDAY's token. Falls back to native edit."""
+        friday = self.friday_url
+        if not friday:
+            return await self.edit_message_text(chat_id, message_id, text, parse_mode)
+
+        client = await self._get_client()
+        try:
+            resp = await client.post(
+                f"{friday}/editMessageText",
+                json={
+                    "chat_id": chat_id,
+                    "message_id": message_id,
+                    "text": text,
+                    "parse_mode": parse_mode,
+                    "disable_web_page_preview": True,
+                },
+            )
+            data = resp.json()
+            if not data.get("ok"):
+                return await self.edit_message_text(chat_id, message_id, text, parse_mode)
+            return True
+        except Exception:
+            return await self.edit_message_text(chat_id, message_id, text, parse_mode)
 
     # ── Photo Sending ──────────────────────────────────────
 

@@ -22,6 +22,7 @@ class PlatformSettings(BaseSettings):
     # ── Telegram (PredictorX Bot) ─────────────────────────
     telegram_bot_token: str = Field("", description="Telegram bot token")
     telegram_chat_id: str = Field("", description="Telegram chat ID")
+    friday_bot_token: str = Field("", description="FRIDAY bot token for routing alerts through FRIDAY")
 
     # ── Kalshi API ────────────────────────────────────────
     kalshi_api_key_id: str = Field("", description="Kalshi API key ID")

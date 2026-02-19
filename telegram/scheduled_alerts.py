@@ -161,7 +161,7 @@ async def pre_market_scan():
     lines.append("Alerts will fire if thresholds hit.")
 
     text = "\n".join(lines)
-    await bot.send_message(text)
+    await bot.send_via_friday(text)
     logger.info("Pre-market scan sent")
 
 
@@ -217,7 +217,7 @@ async def check_exit_signals():
                     "",
                     f"<i>{PSYCH_SYSTEM_TRUST}</i>",
                 ]
-                await bot.send_message("\n".join(lines))
+                await bot.send_via_friday("\n".join(lines))
                 positions_to_remove.append(i)
                 continue
 
@@ -235,7 +235,7 @@ async def check_exit_signals():
                         "Put premium likely at or below 50% target. Buy to close.",
                         f"<i>{PSYCH_HOLD_WINNER}</i>" if spy_move_pct < 1.2 else "Take profit NOW.",
                     ]
-                    await bot.send_message("\n".join([l for l in lines if l]))
+                    await bot.send_via_friday("\n".join([l for l in lines if l]))
                     positions_to_remove.append(i)
 
                 # Cut loss proxy: SPY dropped -1.5% from entry = put premium likely doubled
@@ -251,7 +251,7 @@ async def check_exit_signals():
                         "",
                         f"<i>{PSYCH_NO_REVENGE}</i>",
                     ]
-                    await bot.send_message("\n".join(lines))
+                    await bot.send_via_friday("\n".join(lines))
                     positions_to_remove.append(i)
 
                 # Warning: SPY down >0.8% = put getting expensive
@@ -265,7 +265,7 @@ async def check_exit_signals():
                         "Buy to close if SPY drops to -1.5% from entry.",
                         f"<i>{PSYCH_SIZE_CHECK}</i>",
                     ]
-                    await bot.send_message("\n".join(lines))
+                    await bot.send_via_friday("\n".join(lines))
                     pos["warned"] = True
 
             elif position_type == "naked_call":
@@ -279,7 +279,7 @@ async def check_exit_signals():
                         "",
                         "Call premium likely at 50% target. Buy to close.",
                     ]
-                    await bot.send_message("\n".join(lines))
+                    await bot.send_via_friday("\n".join(lines))
                     positions_to_remove.append(i)
 
                 # Cut loss proxy: SPY rallied +1.5% = call premium doubled
@@ -293,7 +293,7 @@ async def check_exit_signals():
                         "Call premium likely doubled (2x stop). Buy to close NOW.",
                         f"<i>{PSYCH_CUT_LOSER}</i>",
                     ]
-                    await bot.send_message("\n".join(lines))
+                    await bot.send_via_friday("\n".join(lines))
                     positions_to_remove.append(i)
 
                 elif spy_move_pct >= 0.8 and not pos.get("warned"):
@@ -305,7 +305,7 @@ async def check_exit_signals():
                         "",
                         "Buy to close if SPY rallies to +1.5% from entry.",
                     ]
-                    await bot.send_message("\n".join(lines))
+                    await bot.send_via_friday("\n".join(lines))
                     pos["warned"] = True
 
             continue  # Skip the long_call logic below
@@ -322,7 +322,7 @@ async def check_exit_signals():
                 "Sell half now, let rest ride.",
                 f"Entered: {pos['opened'].strftime('%b %d %I:%M %p')} CST",
             ]
-            await bot.send_message("\n".join(lines))
+            await bot.send_via_friday("\n".join(lines))
             positions_to_remove.append(i)
 
         # Cut loss: SPY dropped -1.5% from entry (calls down ~50-70%)
@@ -336,7 +336,7 @@ async def check_exit_signals():
                 "Exit now. Preserve capital.",
                 "Wait for VIX reversion signal before re-entry.",
             ]
-            await bot.send_message("\n".join(lines))
+            await bot.send_via_friday("\n".join(lines))
             positions_to_remove.append(i)
 
         # Warning: down >0.8% from entry
@@ -351,7 +351,7 @@ async def check_exit_signals():
                     "",
                     "Tighten stop. Cut at -1.5% from entry.",
                 ]
-                await bot.send_message("\n".join(lines))
+                await bot.send_via_friday("\n".join(lines))
                 pos["warned"] = True
 
     # Remove closed positions
@@ -413,7 +413,7 @@ async def evening_prep():
     lines.append("")
     lines.append("Pre-market scan at 6:30 AM CST.")
 
-    await bot.send_message("\n".join(lines))
+    await bot.send_via_friday("\n".join(lines))
     logger.info("Evening prep sent")
 
 

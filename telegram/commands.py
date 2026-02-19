@@ -39,6 +39,7 @@ def register_all_commands():
         text = (
             "<b>\U0001f916 PredictorX Commands</b>\n\n"
             "/scan \u2014 Run fresh scan, show top opportunities\n"
+            "/wscan \u2014 Scan live Kalshi weather markets for trades\n"
             "/weather [city] \u2014 Weather prediction details\n"
             "/tails \u2014 S&P tail analysis with VIX regime\n"
             "/whales \u2014 Top Polymarket trader activity\n"
@@ -121,6 +122,17 @@ def register_all_commands():
 
         except Exception as e:
             await bot.send_message(f"Weather analysis error: {e}", chat_id=chat_id)
+
+    @bot.command("wscan")
+    async def cmd_wscan(chat_id: str, args: str):
+        """Scan live Kalshi weather markets for NO sweet spot trades."""
+        try:
+            await bot.send_message("\u23f3 Scanning live Kalshi weather markets...", chat_id=chat_id)
+            from pipeline.weather_scanner import scan_weather_markets
+            await scan_weather_markets(force=True)
+            # If no trades were sent for approval, let user know
+        except Exception as e:
+            await bot.send_message(f"Weather scan error: {e}", chat_id=chat_id)
 
     @bot.command("whales")
     async def cmd_whales(chat_id: str, args: str):

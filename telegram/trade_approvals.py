@@ -100,25 +100,10 @@ async def send_trade_for_approval(
     settle_str = _format_settlement_time(close_time)
 
     lines = [
-        f"\U0001f534 <b>TRADE OPPORTUNITY</b> [{strategy.upper()}]",
-        "",
+        f"<b>{strategy.upper()} {side.upper()}</b> | {win_rate:.0%} prob | ${cost:.2f} \u2192 +${profit:.2f}",
         f"<code>{ticker}</code>",
-        f"BUY {side.upper()} {contracts}x @ {price_cents}c",
-        "",
-        f"Risk: <b>${cost:.2f}</b>",
-        f"Reward: <b>+${profit:.2f}</b> ({roi:.1f}% ROI)",
+        f"{contracts}x @ {price_cents}c | {grade} | \u23f0 30min",
     ]
-    if win_rate:
-        prob_line = f"Win probability: <b>{win_rate:.1%}</b>"
-        if grade:
-            prob_line += f"  |  Grade: <b>{grade}</b>"
-        lines.append(prob_line)
-    if settle_str:
-        lines.append(f"Settles: <b>{settle_str}</b>")
-    lines.append("")
-    lines.append(description)
-    lines.append("")
-    lines.append(f"\u23f0 Expires in 30 min")
     text = "\n".join(lines)
 
     # Inline keyboard with APPROVE and SKIP buttons
@@ -127,18 +112,18 @@ async def send_trade_for_approval(
             [
                 {
                     "text": "\u2705 APPROVE",
-                    "callback_data": f"trade_approve:{trade_id}",
+                    "callback_data": f"approve:{trade_id}",
                 },
                 {
                     "text": "\u274c SKIP",
-                    "callback_data": f"trade_skip:{trade_id}",
+                    "callback_data": f"skip:{trade_id}",
                 },
             ]
         ]
     }
 
     bot = get_bot()
-    result = await bot.send_message(text, reply_markup=reply_markup)
+    result = await bot.send_via_friday(text, reply_markup=reply_markup)
 
     if isinstance(result, dict):
         _pending_trades[trade_id]["message_id"] = result.get("message_id")
@@ -192,31 +177,14 @@ async def send_batch_for_approval(
             "entry_id": entry_id,
         })
 
+        meta = t.get("metadata", {})
+        wr = meta.get("win_rate", 0)
+        gr = meta.get("grade", "")
         lines.append(
-            f"<b>{i+1}.</b> <code>{t['ticker']}</code>"
+            f"<b>{i+1}.</b> <code>{t['ticker']}</code> {t['side'].upper()} "
+            f"{t['contracts']}x@{t['price_cents']}c = ${cost:.2f}\u2192+${profit:.2f}"
+            f" | {wr:.0%} {gr}"
         )
-        lines.append(
-            f"   {t['side'].upper()} {t['contracts']}x @ {t['price_cents']}c"
-            f" = ${cost:.2f} → +${profit:.2f} ({roi:.0f}%)"
-        )
-        # Show probability, grade, settlement from metadata
-        t_meta = t.get("metadata", {})
-        detail_parts = []
-        t_wr = t_meta.get("win_rate", 0)
-        t_grade = t_meta.get("grade", "")
-        t_close = t_meta.get("close_time", "")
-        if t_wr:
-            detail_parts.append(f"{t_wr:.1%} win")
-        if t_grade:
-            detail_parts.append(f"Grade: {t_grade}")
-        t_settle = _format_settlement_time(t_close)
-        if t_settle:
-            detail_parts.append(f"Settles {t_settle}")
-        if detail_parts:
-            lines.append(f"   {' | '.join(detail_parts)}")
-        if t.get("description"):
-            lines.append(f"   {t['description']}")
-        lines.append("")
 
     lines.append(f"<b>Total: ${total_cost:.2f} deployed → +${total_profit:.2f} profit</b>")
     lines.append("")
@@ -237,20 +205,20 @@ async def send_batch_for_approval(
             [
                 {
                     "text": f"\u2705 APPROVE ALL ({len(trades)} trades, ${total_cost:.2f})",
-                    "callback_data": f"trade_approve:{batch_id}",
+                    "callback_data": f"approve:{batch_id}",
                 },
             ],
             [
                 {
                     "text": "\u274c SKIP ALL",
-                    "callback_data": f"trade_skip:{batch_id}",
+                    "callback_data": f"skip:{batch_id}",
                 },
             ],
         ]
     }
 
     bot = get_bot()
-    result = await bot.send_message("\n".join(lines), reply_markup=reply_markup)
+    result = await bot.send_via_friday("\n".join(lines), reply_markup=reply_markup)
 
     if isinstance(result, dict):
         _pending_trades[batch_id]["message_id"] = result.get("message_id")
@@ -284,7 +252,7 @@ async def handle_trade_callback(chat_id: str, message_id: int, callback_data: st
     trade = _pending_trades.get(trade_id)
     if not trade:
         await bot.answer_callback_query(callback_query_id, "Trade expired or not found")
-        await bot.edit_message_text(chat_id, message_id, "\u23f0 Trade expired or already handled.")
+        await bot.edit_via_friday(chat_id, message_id, "\u23f0 Trade expired or already handled.")
         return
 
     # Enforce expiry at button press time (not just on cleanup)
@@ -293,7 +261,7 @@ async def handle_trade_callback(chat_id: str, message_id: int, callback_data: st
         trade["status"] = "expired"
         del _pending_trades[trade_id]
         await bot.answer_callback_query(callback_query_id, "Trade expired (30+ min old)")
-        await bot.edit_message_text(chat_id, message_id, "\u23f0 Trade expired — prices are stale. Wait for next scan.")
+        await bot.edit_via_friday(chat_id, message_id, "\u23f0 Trade expired — prices are stale. Wait for next scan.")
         logger.info(f"Trade {trade_id} expired on button press ({elapsed:.0f}s old)")
         return
 
@@ -302,10 +270,10 @@ async def handle_trade_callback(chat_id: str, message_id: int, callback_data: st
         return
 
     # ── SKIP ──
-    if action == "trade_skip":
+    if action == "skip":
         trade["status"] = "skipped"
         await bot.answer_callback_query(callback_query_id, "Skipped")
-        await bot.edit_message_text(
+        await bot.edit_via_friday(
             chat_id, message_id,
             f"\u274c <b>SKIPPED</b> — No orders placed.\n\n<i>You chose to skip this opportunity.</i>",
         )
@@ -314,7 +282,7 @@ async def handle_trade_callback(chat_id: str, message_id: int, callback_data: st
         return
 
     # ── APPROVE ──
-    if action == "trade_approve":
+    if action == "approve":
         trade["status"] = "executing"
         await bot.answer_callback_query(callback_query_id, "Executing trades...")
 
@@ -346,7 +314,7 @@ async def handle_trade_callback(chat_id: str, message_id: int, callback_data: st
             total_cost = sum(r.get("cost", 0) for r in results if r.get("status") == "filled")
 
             trade["status"] = "executed"
-            await bot.edit_message_text(
+            await bot.edit_via_friday(
                 chat_id, message_id,
                 f"\u2705 <b>APPROVED — {filled}/{total} orders filled</b>\n"
                 f"Total deployed: ${total_cost:.2f}\n\n"
@@ -371,7 +339,7 @@ async def handle_trade_callback(chat_id: str, message_id: int, callback_data: st
             status_emoji = "\u2705" if result.get("status") == "filled" else "\u274c"
             status_text = result.get("status", "unknown").upper()
 
-            await bot.edit_message_text(
+            await bot.edit_via_friday(
                 chat_id, message_id,
                 f"{status_emoji} <b>{status_text}</b> — {trade['ticker']}\n"
                 f"BUY {trade['side'].upper()} {trade['contracts']}x @ {trade['price_cents']}c\n"
@@ -384,6 +352,6 @@ async def handle_trade_callback(chat_id: str, message_id: int, callback_data: st
 
 def register_trade_callbacks(bot):
     """Register the trade approval callback handler with the bot."""
-    bot.register_callback("trade_approve", handle_trade_callback)
-    bot.register_callback("trade_skip", handle_trade_callback)
+    bot.register_callback("approve", handle_trade_callback)
+    bot.register_callback("skip", handle_trade_callback)
     logger.info("Registered trade approval callbacks")

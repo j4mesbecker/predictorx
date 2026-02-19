@@ -10,7 +10,7 @@ from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 
-from web.routes import dashboard, opportunities, weather, tails, whales, performance, calibration, ws
+from web.routes import dashboard, opportunities, weather, tails, whales, performance, calibration, ws, execute, trades
 from config.settings import get_settings
 
 logger = logging.getLogger(__name__)
@@ -35,6 +35,8 @@ def create_app() -> FastAPI:
     app.include_router(performance.router, prefix="/api", tags=["Performance"])
     app.include_router(calibration.router, prefix="/api", tags=["Calibration"])
     app.include_router(ws.router, tags=["WebSocket"])
+    app.include_router(execute.router, prefix="/api", tags=["Execution"])
+    app.include_router(trades.router, prefix="/api", tags=["Trades"])
 
     # Serve static files
     static_dir = Path(__file__).parent / "static"

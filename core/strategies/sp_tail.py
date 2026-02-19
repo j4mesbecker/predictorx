@@ -87,7 +87,7 @@ class SPTailStrategy(Strategy):
 
             pred = Prediction(
                 strategy="sp_tail",
-                market_ticker=f"INXD-{datetime.now().strftime('%d%b%y').upper()}-B{int(strike_info['strike'])}",
+                market_ticker=f"INXD-{datetime.now().strftime('%y%b%d').upper()}-B{int(strike_info['strike'])}",
                 market_title=f"S&P 500 drop >{pct}% today? (Strike: {strike_info['strike']:.0f})",
                 platform="kalshi",
                 predicted_probability=win_prob,
