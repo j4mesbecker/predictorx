@@ -179,6 +179,12 @@ def place_order(
     _reset_if_new_day()
     global _deployed_today
 
+    # HARD RULE: NO trades only on SPX brackets and weather.
+    # YES is negative EV — confirmed across 443K SPX and 16K weather markets.
+    if side == "yes" and strategy in ("spx_bracket", "weather"):
+        logger.warning(f"Order BLOCKED: {ticker} — YES trades banned on {strategy} (negative EV)")
+        return {"status": "blocked", "reason": f"YES trades banned on {strategy}", "ticker": ticker}
+
     cost = (contracts * price_cents) / 100.0
 
     # Safety checks

@@ -414,6 +414,11 @@ async def scan_spx_brackets(force: bool = False):
         contracts = t.get("contracts", 0)
         zone = t.get("zone", "sweet_spot")
 
+        # HARD RULE: NO trades only. YES is negative EV from 443K markets.
+        if side != "no":
+            logger.info(f"Blocking {ticker} — only NO trades allowed (got side={side})")
+            continue
+
         if contracts <= 0:
             continue
 

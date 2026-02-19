@@ -5,9 +5,9 @@ Built from 443,621 settled Kalshi INX (S&P 500) bracket markets.
 Key finding from 50GB historical dataset analysis:
   - Kalshi SPX brackets are 25-point ranges (e.g., 6800-6825)
   - Cheap YES brackets (1-25c) almost NEVER hit — market makers extract 10-15% edge
-  - FAR-OUT NO strategy: Buy NO at 95-99c on brackets 100+ pts away → 99.6% WR
+  - FAR-OUT NO strategy: Buy NO at 91-99c on brackets 100+ pts away → 99.6% WR
   - SWEET SPOT NO: Buy NO at 51-90c (YES 10-49c) → 94.7% WR, higher per-trade profit
-  - Only YES >50c has positive expected value for the buyer
+  - NO is the ONLY positive EV side at every price point
 
 Two NO strategies by risk profile:
   1. FAR-OUT NO (conservative): YES priced 1-5c, NO costs 95-99c
@@ -56,7 +56,7 @@ SPX_PRICE_CALIBRATION = {
     # DANGER ZONE — NO loses money historically
     (70, 80):  {"yes_rate": 0.180, "no_wr": 0.820, "no_roi": -0.040, "trades": 28},
     (80, 90):  {"yes_rate": 0.450, "no_wr": 0.550, "no_roi": -0.220, "trades": 15},
-    # YES ZONE — only range where buying YES has edge
+    # SKIP ZONE — YES wins 84% but costs 90-99c, so edge is still negative
     (90, 100): {"yes_rate": 0.840, "no_wr": 0.160, "no_roi": -0.600, "trades": 281},
 }
 
@@ -200,14 +200,18 @@ def get_spx_edge_signal(
             "reason": reason,
         }
 
-    # YES ZONE: YES priced 90-99c → only range where buying YES has edge
+    # YES ZONE: YES priced 90-99c → looks like YES should win but edge is negative
+    # YES=90c costs $0.90, actual WR ~84% → EV is negative. Skip.
     elif 90 <= market_price_cents <= 99:
-        side = "yes"
-        yes_cost = market_price_cents / 100.0
-        yes_rate = cal_data["yes_rate"]
-        win_rate = min(yes_rate * distance_factor, 0.95)
-        edge = win_rate - yes_cost
-        reason = f"YES zone: {win_rate:.0%} actual WR vs {yes_cost:.0%} cost | {bucket_trades} markets"
+        side = "skip"
+        win_rate = 0.0
+        edge = 0.0
+        reason = "YES 90-99c — overpriced, negative EV even though YES often wins"
+        return {
+            "side": side, "edge": 0.0, "win_rate": 0.0,
+            "confidence": 0.0, "kelly_pct": 0.0, "grade": "F",
+            "reason": reason,
+        }
 
     else:
         side = "skip"

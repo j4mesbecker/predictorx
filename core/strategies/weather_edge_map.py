@@ -47,9 +47,9 @@ PRICE_CALIBRATION = {
     (45, 55): 0.318,   # Market says ~50%, actual 31.8% → BUY NO
     (55, 65): 0.111,   # Market says ~60%, actual 11.1% → BUY NO (biggest edge)
     (65, 75): 0.500,   # Market says ~70%, actual 50.0% → BUY NO
-    # DANGER ZONE — edge thins
-    (75, 85): 0.800,   # Market says ~80%, actual 80.0% → FAIR
-    (85, 95): 1.000,   # Market says ~90%, actual 100%  → BUY YES
+    # DANGER ZONE — edge thins, do not trade
+    (75, 85): 0.800,   # Market says ~80%, actual 80.0% → SKIP
+    (85, 95): 1.000,   # Market says ~90%, actual 100%  → SKIP (overpriced YES)
 }
 
 # City-specific NO edge (when YES priced 15-70c)
@@ -176,13 +176,12 @@ def get_edge_signal(
         edge = 0.0
         reason = "YES 71-85c danger zone — NO has thin/negative EV"
 
-    # YES ZONE: YES priced 86+c → buy YES
+    # YES ZONE: YES priced 86+c → skip. Overpriced even when YES wins.
     elif market_price_cents > 85:
-        side = "yes"
-        yes_cost = market_price_cents / 100.0
-        win_rate = actual_yes_rate
-        edge = win_rate - yes_cost
-        reason = f"High-probability YES: {win_rate:.0%} actual vs {yes_cost:.0%} cost"
+        side = "skip"
+        win_rate = 0.0
+        edge = 0.0
+        reason = "YES 86+c — overpriced, skip"
 
     else:
         side = "skip"
