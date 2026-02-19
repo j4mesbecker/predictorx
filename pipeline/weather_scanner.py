@@ -1,13 +1,10 @@
 """
 PredictorX — Weather Market Scanner
-Fetches LIVE Kalshi weather markets and finds NO opportunities in the sweet spot.
+Fetches LIVE Kalshi weather markets and finds NO opportunities.
 
-Unlike the old weather strategy that constructed tickers (which often didn't match),
-this scanner fetches real market tickers from Kalshi's API and applies the edge map
-to determine which are tradeable.
-
-Backed by 11,220 settled market analysis:
-  - YES priced 15-70c sweet spot: 81% NO win rate, +15.2% ROI
+Two-tier weather NO strategy backed by 16,347 settled markets:
+  1. FAR-OUT NO: YES 1-14c → NO wins 99-100%, n=11,842
+  2. SWEET SPOT NO: YES 15-70c → 81% NO WR, +15.2% ROI
   - Best cities: LAX (+53%), DEN (+34%), PHI (+28%), CHI (+21%)
   - Best months: Dec (+34%), Jan (+31%), Mar (+28%)
   - Worst: Oct (-24%), Sep (-11%), Feb (-5%)
@@ -23,8 +20,10 @@ from core.strategies.weather_edge_map import get_edge_signal
 logger = logging.getLogger(__name__)
 
 # ── Weather Trade Limits ───────────────────────────────────
-WEATHER_MAX_PER_TRADE = 15.0    # $15 max per weather trade
-WEATHER_DAILY_BUDGET = 100.0    # $100 max total weather deployment per day
+WEATHER_MAX_PER_TRADE = 15.0      # $15 max per sweet spot weather trade
+WEATHER_DAILY_BUDGET = 100.0      # $100 max sweet spot weather per day
+WEATHER_FAROUT_MAX = 20.0         # $20 max per far-out weather NO trade
+WEATHER_FAROUT_BUDGET = 50.0      # $50 max far-out weather NO per day
 
 # ── Kalshi Weather Series ──────────────────────────────────
 # Maps internal city code to Kalshi series ticker prefix
@@ -141,7 +140,10 @@ def _fetch_weather_markets() -> list[dict]:
 
 
 def _filter_sweet_spot(markets: list[dict]) -> list[dict]:
-    """Filter weather markets to the NO sweet spot (YES 15-70c)."""
+    """Filter weather markets to two NO zones:
+    1. FAR-OUT NO: YES 1-14c → NO wins 99-100%
+    2. SWEET SPOT NO: YES 15-70c → 81% WR
+    """
     month = datetime.now().month
     sweet = []
 
@@ -150,18 +152,16 @@ def _filter_sweet_spot(markets: list[dict]) -> list[dict]:
         if yes_price <= 0:
             continue
 
-        # Sweet spot: YES priced 15-70c
-        if not (15 <= yes_price <= 70):
+        # Accept two zones: far-out (1-14c) and sweet spot (15-70c)
+        if not (1 <= yes_price <= 70):
             continue
 
-        # Skip very low volume markets (likely stale)
-        if m["volume"] < 5:
+        # Skip very low volume for sweet spot (far-out can be low volume)
+        if yes_price >= 15 and m["volume"] < 5:
             continue
 
-        # Get edge signal from historical data
         # Map city code for edge map lookup
         edge_city = m["city_code"]
-        # The edge map uses NYC not NY, PHI not PHIL
         city_remap = {"NY": "NYC", "PHI": "PHI"}
         edge_city = city_remap.get(edge_city, edge_city)
 
@@ -177,11 +177,13 @@ def _filter_sweet_spot(markets: list[dict]) -> list[dict]:
 
         m["signal"] = signal
         m["yes_price"] = yes_price
+        m["zone"] = "farout" if yes_price < 15 else "sweet_spot"
         sweet.append(m)
 
-    # Sort by edge (highest first), then by grade
+    # Sort: far-out NO first (safest), then by grade, then by edge
     grade_order = {"A+": 0, "A": 1, "B": 2, "C": 3}
     sweet.sort(key=lambda x: (
+        0 if x["zone"] == "farout" else 1,
         grade_order.get(x["signal"]["grade"], 4),
         -x["signal"]["edge"],
     ))
@@ -252,13 +254,15 @@ async def scan_weather_markets(force: bool = False):
     from pipeline.kalshi_executor import get_deployed_today
 
     approval_trades = []
-    batch_cost_so_far = 0.0
+    farout_cost_so_far = 0.0
+    sweet_cost_so_far = 0.0
 
     for m in top:
         side = m["signal"]["side"]
         signal = m["signal"]
+        zone = m.get("zone", "sweet_spot")
 
-        # Only take NO trades in the sweet spot
+        # Only take NO trades
         if side != "no":
             continue
 
@@ -271,45 +275,56 @@ async def scan_weather_markets(force: bool = False):
 
         price_cents = no_ask
 
-        # Skip if NO is too expensive (thin margin)
-        if price_cents > 90:
+        # Skip if NO price too high (no profit)
+        if price_cents > 99:
             continue
 
-        # Size: max per trade, respect daily budget
-        max_cost = WEATHER_MAX_PER_TRADE
+        # Size based on zone
+        max_cost = WEATHER_FAROUT_MAX if zone == "farout" else WEATHER_MAX_PER_TRADE
         contracts = int((max_cost * 100) / price_cents)
         if contracts <= 0:
             continue
 
         trade_cost = (contracts * price_cents) / 100.0
 
-        # Budget check
+        # Zone-specific budget check
         deployed = get_deployed_today()
-        remaining_budget = WEATHER_DAILY_BUDGET - deployed - batch_cost_so_far
+        if zone == "farout":
+            remaining_budget = WEATHER_FAROUT_BUDGET - deployed - farout_cost_so_far
+        else:
+            remaining_budget = WEATHER_DAILY_BUDGET - deployed - sweet_cost_so_far
+
         if remaining_budget <= 0:
-            logger.info(f"Weather daily budget exhausted (deployed ${deployed:.2f})")
-            break
+            budget_name = "far-out" if zone == "farout" else "sweet spot"
+            logger.info(f"Weather {budget_name} budget exhausted (deployed ${deployed:.2f})")
+            continue
         if trade_cost > remaining_budget:
             contracts = int((remaining_budget * 100) / price_cents)
             if contracts <= 0:
                 continue
             trade_cost = (contracts * price_cents) / 100.0
 
-        batch_cost_so_far += trade_cost
+        if zone == "farout":
+            farout_cost_so_far += trade_cost
+        else:
+            sweet_cost_so_far += trade_cost
 
+        zone_label = "FAR-OUT" if zone == "farout" else "SWEET"
         approval_trades.append({
             "ticker": m["ticker"],
             "side": "no",
             "contracts": contracts,
             "price_cents": price_cents,
             "description": (
-                f"{m['city_code']} | {m['subtitle']}"
+                f"{m['city_code']} | {zone_label} NO"
+                f" | {m['subtitle']}"
                 f" | {signal['edge']:.0%} edge"
                 f" | {signal['win_rate']:.0%} WR"
                 f" | Grade: {signal['grade']}"
             ),
             "metadata": {
                 "city": m["city_code"],
+                "zone": zone,
                 "edge": signal["edge"],
                 "win_rate": signal["win_rate"],
                 "grade": signal["grade"],

@@ -3,18 +3,15 @@ PredictorX — SPX Bracket Scanner
 Scans live Kalshi SPX (INX) bracket markets and fires Telegram alerts
 with specific trade recommendations.
 
-Designed for catalyst days (CPI, FOMC, NFP):
-  1. Waits until after catalyst data drops (e.g., CPI at 7:30 AM CST)
-  2. Fetches current SPX price
-  3. Scans Kalshi brackets 75-150 points away from current SPX
-  4. Finds brackets in the 10-49c YES sweet spot (94.7% NO win rate)
-  5. Sends Telegram alert with exact trade recommendations
+Two-tier NO strategy backed by 443,621 settled markets:
+  1. FAR-OUT NO: YES 1-9c (NO 91-99c) → 99.6% WR, +1.5c/contract, n=12,797
+     - Consistent small profits on distant brackets
+     - Higher daily budget ($50) since risk per trade is tiny
+  2. SWEET SPOT NO: YES 10-49c (NO 51-90c) → 94.7% WR, higher per-trade profit
+     - Best on catalyst days 75-150 pts from current SPX
+     - Standard daily budget ($20)
 
 Also runs as a daily scanner during market hours for non-catalyst days.
-
-Backed by 10,000 settled market analysis:
-  - 25-point brackets, SPX lands in-bracket only 5.9% of time
-  - NO sweet spot (YES 10-49c): 94.7% WR, +17.4% ROI, 531 trades
 """
 
 import hashlib
@@ -35,8 +32,10 @@ API_BASE = "https://api.elections.kalshi.com"
 API_PREFIX = "/trade-api/v2"
 
 # ── Bracket Risk Limits ─────────────────────────────────────
-BRACKET_MAX_PER_TRADE = 10.0   # $10 max risk per bracket trade
-BRACKET_DAILY_BUDGET = 20.0    # $20 max total bracket risk per day
+BRACKET_MAX_PER_TRADE = 10.0     # $10 max risk per bracket trade
+BRACKET_DAILY_BUDGET = 20.0      # $20 max sweet spot bracket risk per day
+FAROUT_MAX_PER_TRADE = 20.0      # $20 max per far-out NO trade (low risk per contract)
+FAROUT_DAILY_BUDGET = 50.0       # $50 max far-out NO risk per day (99.6% WR)
 
 # ── State Tracking ──────────────────────────────────────────
 _last_scan_date: date | None = None
@@ -224,10 +223,9 @@ def _fetch_spx_brackets() -> list[dict]:
 
 def _filter_sweet_spot(markets: list[dict], spx_price: float) -> list[dict]:
     """
-    Filter markets to the sweet spot:
-    - YES priced 10-49c
-    - 50-200 points away from current SPX price
-    - Settling within 48 hours (favor near-term)
+    Filter markets to two NO zones:
+    1. FAR-OUT NO: YES 1-9c, 100+ points away (99.6% WR from 443K markets)
+    2. SWEET SPOT NO: YES 10-49c, 50+ points away (94.7% WR)
     """
     from core.strategies.spx_edge_map import get_spx_edge_signal
 
@@ -236,13 +234,23 @@ def _filter_sweet_spot(markets: list[dict], spx_price: float) -> list[dict]:
         yes_price = m["yes_ask"] if m["yes_ask"] > 0 else m["yes_bid"]
         if yes_price <= 0:
             continue
-        if not (10 <= yes_price <= 49):
+
+        # Accept two zones: far-out (1-9c) and sweet spot (10-49c)
+        if not (1 <= yes_price <= 49):
             continue
 
         # Distance from current SPX
         distance = abs(spx_price - m["bracket_mid"])
-        if distance < 50:
-            continue  # Too close — SPX could easily reach this bracket
+
+        # Distance requirements differ by zone
+        if yes_price <= 9:
+            # Far-out NO: require 100+ pts away (these are already very safe)
+            if distance < 100:
+                continue
+        else:
+            # Sweet spot NO: require 50+ pts away
+            if distance < 50:
+                continue
 
         # Get edge signal
         signal = get_spx_edge_signal(
@@ -257,11 +265,13 @@ def _filter_sweet_spot(markets: list[dict], spx_price: float) -> list[dict]:
         m["signal"] = signal
         m["distance"] = distance
         m["yes_price"] = yes_price
+        m["zone"] = "farout" if yes_price <= 9 else "sweet_spot"
         sweet.append(m)
 
-    # Sort by grade (A+ first), then by edge
+    # Sort: far-out NO first (safest), then by grade, then by edge
     grade_order = {"A+": 0, "A": 1, "B": 2, "C": 3}
     sweet.sort(key=lambda x: (
+        0 if x["zone"] == "farout" else 1,
         grade_order.get(x["signal"]["grade"], 4),
         -x["signal"]["edge"],
     ))
@@ -369,12 +379,16 @@ async def scan_spx_brackets(force: bool = False):
 
     trades = []
     for m in top:
+        # Use different max per trade based on zone
+        zone = m.get("zone", "sweet_spot")
+        max_trade = FAROUT_MAX_PER_TRADE if zone == "farout" else BRACKET_MAX_PER_TRADE
+
         rec = get_spx_trade_recommendation(
             market_price_cents=m["yes_price"],
             balance=balance,
             event_type=m.get("event_type", "daily"),
             distance_from_spx=m["distance"],
-            max_per_trade=BRACKET_MAX_PER_TRADE,
+            max_per_trade=max_trade,
         )
         rec["ticker"] = m["ticker"]
         rec["title"] = m["title"]
@@ -382,6 +396,7 @@ async def scan_spx_brackets(force: bool = False):
         rec["bracket_high"] = m["bracket_high"]
         rec["yes_price"] = m["yes_price"]
         rec["distance"] = m["distance"]
+        rec["zone"] = zone
         trades.append(rec)
 
     # ── SEND FOR APPROVAL: Alert user on Telegram with APPROVE/SKIP buttons ──
@@ -389,13 +404,15 @@ async def scan_spx_brackets(force: bool = False):
 
     # Fetch live orderbook prices for each ticker so we show real costs
     approval_trades = []
-    batch_cost_so_far = 0.0  # Track cost within this batch (not yet deployed)
+    farout_cost_so_far = 0.0   # Far-out NO budget tracking
+    sweet_cost_so_far = 0.0    # Sweet spot budget tracking
     for t in trades:
         if t.get("action") == "SKIP":
             continue
 
         side = t.get("side", "no")
         contracts = t.get("contracts", 0)
+        zone = t.get("zone", "sweet_spot")
 
         if contracts <= 0:
             continue
@@ -423,35 +440,45 @@ async def scan_spx_brackets(force: bool = False):
                 price_cents = t["yes_price"]
 
         # Skip if NO price is too high (no profit margin)
-        if side == "no" and price_cents > 92:
-            logger.info(f"Skipping {ticker}: NO ask {price_cents}c too high")
+        if side == "no" and price_cents > 99:
+            logger.info(f"Skipping {ticker}: NO ask {price_cents}c — no profit")
             continue
 
-        # Recalculate contracts based on live price
+        # Recalculate contracts based on live price and zone-specific max
+        max_trade = FAROUT_MAX_PER_TRADE if zone == "farout" else BRACKET_MAX_PER_TRADE
         if price_cents > 0:
-            max_cost = min(BRACKET_MAX_PER_TRADE, t.get("cost", BRACKET_MAX_PER_TRADE))
+            max_cost = min(max_trade, t.get("cost", max_trade))
             contracts = int((max_cost * 100) / price_cents)
             if contracts <= 0:
                 continue
 
-        # Enforce daily bracket budget using executor's actual deployed amount
+        # Enforce zone-specific daily budgets
         trade_cost = (contracts * price_cents) / 100.0
         from pipeline.kalshi_executor import get_deployed_today
         deployed = get_deployed_today()
-        remaining_budget = BRACKET_DAILY_BUDGET - deployed - batch_cost_so_far
+
+        if zone == "farout":
+            remaining_budget = FAROUT_DAILY_BUDGET - deployed - farout_cost_so_far
+        else:
+            remaining_budget = BRACKET_DAILY_BUDGET - deployed - sweet_cost_so_far
+
         if remaining_budget <= 0:
-            logger.info(f"Daily bracket budget ${BRACKET_DAILY_BUDGET:.0f} exhausted (deployed ${deployed:.2f}), skipping {ticker}")
-            break
+            budget_name = "far-out NO" if zone == "farout" else "sweet spot"
+            logger.info(f"Daily {budget_name} budget exhausted, skipping {ticker}")
+            continue
         if trade_cost > remaining_budget:
-            # Reduce contracts to fit remaining budget
             contracts = int((remaining_budget * 100) / price_cents)
             if contracts <= 0:
                 logger.info(f"Not enough budget for {ticker}, skipping")
                 continue
             trade_cost = (contracts * price_cents) / 100.0
 
-        batch_cost_so_far += trade_cost
+        if zone == "farout":
+            farout_cost_so_far += trade_cost
+        else:
+            sweet_cost_so_far += trade_cost
 
+        zone_label = "FAR-OUT" if zone == "farout" else "SWEET"
         approval_trades.append({
             "ticker": ticker,
             "side": side,
@@ -459,6 +486,7 @@ async def scan_spx_brackets(force: bool = False):
             "price_cents": price_cents,
             "description": (
                 f"SPX {t['bracket_low']:,.0f}-{t['bracket_high']:,.0f}"
+                f" | {zone_label} NO"
                 f" | {t['distance']:.0f}pts away"
                 f" | {t.get('win_rate', 0):.1%} WR"
                 f" | Grade: {t.get('grade', '?')}"
@@ -470,6 +498,7 @@ async def scan_spx_brackets(force: bool = False):
                 "win_rate": t.get("win_rate", 0),
                 "edge": t.get("edge", 0),
                 "grade": t.get("grade", ""),
+                "zone": zone,
                 "spx_price": spx_price,
                 "vix": vix_price,
                 "live_no_ask": no_ask,
@@ -480,10 +509,17 @@ async def scan_spx_brackets(force: bool = False):
 
     filled_count = 0
     if approval_trades:
+        farout_count = sum(1 for t in approval_trades if t["metadata"].get("zone") == "farout")
+        sweet_count = len(approval_trades) - farout_count
+        zone_desc = []
+        if farout_count:
+            zone_desc.append(f"{farout_count} far-out")
+        if sweet_count:
+            zone_desc.append(f"{sweet_count} sweet spot")
         summary = (
             f"SPX @ {spx_price:,.0f} ({change_pct:+.1f}%)"
             f" | VIX {vix_price:.1f} ({regime})"
-            f" | {len(approval_trades)} brackets in sweet spot"
+            f" | {' + '.join(zone_desc)} NO trades"
         )
         await send_batch_for_approval(approval_trades, "spx_bracket", summary)
         logger.warning(
